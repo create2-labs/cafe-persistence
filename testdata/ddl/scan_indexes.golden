@@ -1,0 +1,16 @@
+# pg_indexes on scan_results, tls_scan_results, scan_usage_events (ADR §14.5)
+idx_scan_results_address
+idx_scan_results_deleted_at
+idx_scan_results_status
+idx_scan_results_user_address_created_at
+idx_scan_results_user_id
+idx_scan_usage_events_scan_id
+idx_scan_usage_events_user_kind
+idx_tls_scan_results_deleted_at
+idx_tls_scan_results_status
+idx_tls_scan_results_url
+idx_tls_scan_results_user_id
+idx_tls_scan_results_user_url_created_at
+scan_results_pkey
+scan_usage_events_pkey
+tls_scan_results_pkey

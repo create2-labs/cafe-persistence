@@ -1,0 +1,14 @@
+POSTGRES_HOST: "postgres"
+POSTGRES_PORT: "5432"
+POSTGRES_DATABASE: "cafe"
+POSTGRES_USER: "cafe"
+POSTGRES_PASSWORD: "cafe"
+POSTGRES_SSLMODE: "disable"
+NATS_URL: "nats://nats:4222"
+REDIS_URL: "redis://redis:6379"
+LOG_LEVEL: "info"
+blockchains:
+  - name: ethereum-mainnet
+    rpc: "https://ethereum-rpc.publicnode.com"
+    moralis_chain_name: "eth"
+    chain_id: 1
