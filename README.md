@@ -34,8 +34,20 @@ Environment variables (or `config.yaml` via `CONFIG_PATH`):
 | `NATS_URL` | `nats://localhost:4222` |
 | `REDIS_URL` | `redis://localhost:6379` |
 | `LOG_LEVEL` | `info` |
+| `PERSISTENCE_HEALTH_PORT` | `8081` (HTTP `/health`, `/ready` — PERS-D2b) |
 
 `config.yaml` must include `blockchains[].chain_id` for wallet observation export (CPM wire contract).
+
+## Health probes (PERS-D2b)
+
+Internal HTTP server (not exposed on public edge):
+
+| Endpoint | Role |
+|----------|------|
+| `GET /health` | Liveness — process up |
+| `GET /ready` | Readiness — scan migrations applied + NATS connected + scan subscriptions active |
+
+Compose healthcheck uses `/ready` (see `cafe-deploy/compose/20-discovery.yml`).
 
 ## DDL scan (ADR §14.5)
 

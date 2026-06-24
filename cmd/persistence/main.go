@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"os/signal"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"cafe-persistence/internal/config"
+	"cafe-persistence/internal/health"
 	"cafe-persistence/internal/persistence/handlers"
 	"cafe-persistence/internal/scanddl"
 	"cafe-persistence/internal/persistence/planlimit"
@@ -28,6 +30,20 @@ import (
 func main() {
 	initConfig()
 	initLogging()
+
+	healthState := &health.State{}
+	healthPort := viper.GetString(config.PersistenceHealthPort)
+	if healthPort == "" {
+		healthPort = "8081"
+	}
+	healthServer := health.NewServer("0.0.0.0", healthPort, healthState)
+	healthServer.Start()
+	defer func() {
+		healthState.SetReady(false)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = healthServer.Shutdown(shutdownCtx)
+	}()
 
 	// Postgres
 	db := postgresdb.New()
@@ -87,10 +103,17 @@ func main() {
 		log.Fatal().Err(err).Msg("subscribe scan events failed")
 	}
 	defer func() {
+		healthState.SetReady(false)
 		for _, sub := range subs {
 			_ = sub.Unsubscribe()
 		}
 	}()
+
+	if !nc.IsConnected() {
+		log.Fatal().Msg("NATS not connected after subscribe")
+	}
+	healthState.SetReady(true)
+	log.Info().Str("port", healthPort).Msg("persistence readiness OK (/ready returns 200)")
 
 	// Signal to backend that persistence is ready; repeat for a while so backend can catch it when it starts after us
 	go func() {

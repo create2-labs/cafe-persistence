@@ -10,6 +10,9 @@ const (
 	// Scanner health check configuration
 	ScannerHealthPort = "SCANNER_HEALTH_PORT"
 
+	// PersistenceHealthPort is the HTTP port for /health and /ready probes (PERS-D2b).
+	PersistenceHealthPort = "PERSISTENCE_HEALTH_PORT"
+
 	// PostgreSQL configuration
 	PostgreSQLHost = "POSTGRES_HOST"
 	PostgreSQLPort = "POSTGRES_PORT"
@@ -81,7 +84,8 @@ const (
 	defaultMoralisAPIURL      = "https://deep-index.moralis.io"
 	defaultServerHost         = "0.0.0.0"
 	defaultServerPort         = "8080"
-	defaultScannerHealthPort  = "8081"
+	defaultScannerHealthPort     = "8081"
+	defaultPersistenceHealthPort = "8081"
 	defaultCORSAllowOrigins   = "http://localhost:3000,http://localhost:3001,http://localhost:5173"
 	defaultCORSAllowMethods   = "GET,POST,PUT,DELETE,OPTIONS"
 	// Cloudflare Turnstile development keys (always pass verification)
@@ -107,6 +111,7 @@ func GetDefaultConfigValues() map[string]any {
 		ServerHost:               defaultServerHost,
 		ServerPort:               defaultServerPort,
 		ScannerHealthPort:        defaultScannerHealthPort,
+		PersistenceHealthPort:    defaultPersistenceHealthPort,
 		MoralisAPIKey:            defaultMoralisAPIKey,
 		MoralisAPIURL:            defaultMoralisAPIURL,
 		CORSAllowOrigins:         defaultCORSAllowOrigins,
