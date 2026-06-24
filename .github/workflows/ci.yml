@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: cafe
+          POSTGRES_PASSWORD: cafe
+          POSTGRES_DB: cafe
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U cafe -d cafe"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Unit tests
+        run: go test ./...
+
+      - name: DDL integration test (ADR §14.5)
+        env:
+          POSTGRES_HOST: 127.0.0.1
+          POSTGRES_PORT: 5432
+          POSTGRES_USER: cafe
+          POSTGRES_PASSWORD: cafe
+          POSTGRES_DATABASE: cafe
+          POSTGRES_SSLMODE: disable
+        run: go test -tags=integration ./internal/scanddl/...
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build persistence CI image
+        run: |
+          set -euo pipefail
+          docker build \
+            --target ci \
+            -f Dockerfile-persistence \
+            -t cafe-persistence:ci .
+
+      - name: Run persistence CI checks (inside CI image)
+        run: docker run --rm cafe-persistence:ci
+
+      - name: Build runtime image
+        run: |
+          docker build \
+            -f Dockerfile-persistence \
+            -t oleglod/cafe-persistence:ci-local \
+            .

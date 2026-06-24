@@ -1,0 +1,10 @@
+# Go
+*.exe
+*.test
+*.out
+/persistence
+.gomodcache/
+
+# IDE
+.idea/
+.vscode/
