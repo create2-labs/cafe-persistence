@@ -34,7 +34,7 @@ golangci-lint run ./...
 deadcode -test -tags=integration ./...
 ```
 
-Attendu aujourd’hui : **0 unreachable** après PERS-D4. Les handlers HTTP CP (PERS-D4b) brancheront `cpstore` depuis `main`.
+Attendu aujourd’hui : **0 unreachable** après PERS-D4b (`cpstore` + `internal/cpapi` branchés depuis `main`).
 
 ## Configuration
 
@@ -50,7 +50,7 @@ Environment variables (or `config.yaml` via `CONFIG_PATH`):
 | `REDIS_URL` | `redis://localhost:6379` |
 | `LOG_LEVEL` | `info` |
 | `PERSISTENCE_HEALTH_PORT` | `8081` (HTTP `/health`, `/ready` — PERS-D2b) |
-| `PERSISTENCE_INTERNAL_HTTP_PORT` | `8082` (internal scan API — PERS-D3a-impl) |
+| `PERSISTENCE_INTERNAL_HTTP_PORT` | `8082` (internal scan + CP API — PERS-D3a-impl / PERS-D4b) |
 | `CAFE_PERSISTENCE_SERVICE_TOKEN` | *(unset — internal API rejects all callers until set)* |
 
 `config.yaml` must include `blockchains[].chain_id` for wallet observation export (CPM wire contract).
@@ -73,29 +73,31 @@ OpenAPI spec and HTTP handlers for service-to-service scan operations (pending, 
 
 **Consumer:** `cafe-discovery` D6a-* milestones map public `/api/discovery/v1` to this contract.
 
-## Internal CP API contract (PERS-D3b-spec)
+## Internal CP API (PERS-D3b-spec / PERS-D4b)
 
-OpenAPI spec for service-to-service crypto policy storage (drafts, persist, policies, W1/W3 references).
+OpenAPI spec and HTTP handlers for service-to-service crypto policy storage (drafts, persist, policies, W1/W3 references).
 
 | Artifact | Path |
 |----------|------|
 | OpenAPI | `openapi/internal/cp/v1.yaml` |
 | Route constants | `internal/cproutes/routes.go` |
 | Contract tests (spec) | `internal/contract/cp_v1_openapi_test.go` |
+| HTTP handlers | `internal/cpapi/` |
+| Handler contract tests | `internal/cpapi/handler_test.go` |
 
 **Base path:** `/internal/cp/v1` on `PERSISTENCE_INTERNAL_HTTP_PORT` (default `8082`, same listener as scan).
 
-**Auth:** same as scan — `Authorization: Bearer <CAFE_PERSISTENCE_SERVICE_TOKEN>` plus `X-User-Id` / optional `X-Tenant-Id` (ADR §9.2).
+**Auth:** same as scan — `Authorization: Bearer <CAFE_PERSISTENCE_SERVICE_TOKEN>` plus `X-User-Id` / optional `X-Tenant-Id` (ADR §9.2). Not exposed on public NGINX edge.
 
 **Semantic ownership:** CPM §8.2 (payload, statuses, persist-once). CPM review: `cafe-crypto-policy-mgt/docs/PERS_D3B_SPEC_REVIEW.md`.
 
 **Consumers:** `cafe-crypto-policy-mgt` D5a+ (`CPM_STORE=persistence`); `cafe-discovery` D6b (existence-only refs).
 
-**Spec only** — no HTTP handlers (PERS-D4b). Public `/api/cpm/v1` unchanged.
+Public `/api/cpm/v1` unchanged.
 
 ## CP Postgres storage (PERS-D4)
 
-Owner-scoped crypto policy tables and writers (no HTTP — D4b wires handlers).  
+Owner-scoped crypto policy tables and writers; HTTP handlers in `internal/cpapi` (PERS-D4b).  
 Voir [Schéma Postgres : rôle des migrations et des golden files](#schéma-postgres--rôle-des-migrations-et-des-golden-files) pour le pourquoi des migrations malgré l’absence de prod.
 
 | Artifact | Path |
