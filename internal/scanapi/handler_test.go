@@ -208,7 +208,7 @@ func TestScanAPI_ReserveWalletPending_Conflict(t *testing.T) {
 		"address": addr,
 	})
 	resp2 := doAuthRequest(t, http.MethodPost, ts.URL+scanroutes.Join(scanroutes.PendingWallet), userID, body2)
-	defer resp2.Body.Close()
+	defer func() { _ = resp2.Body.Close() }()
 	if resp2.StatusCode != http.StatusConflict {
 		t.Fatalf("second reserve status = %d, want 409", resp2.StatusCode)
 	}
@@ -231,7 +231,7 @@ func TestScanAPI_GetWalletScan_NotFound(t *testing.T) {
 	url := ts.URL + scanroutes.Join(scanroutes.WalletScanByID)
 	url = strings.Replace(url, "{scan_id}", scanID.String(), 1)
 	resp := doAuthRequest(t, http.MethodGet, url, userID, nil)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", resp.StatusCode)
 	}
@@ -254,7 +254,7 @@ func TestScanAPI_GetWalletScan_OK(t *testing.T) {
 	url := ts.URL + scanroutes.Join(scanroutes.WalletScanByID)
 	url = strings.Replace(url, "{scan_id}", scanID.String(), 1)
 	resp := doAuthRequest(t, http.MethodGet, url, userID, nil)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
@@ -313,7 +313,7 @@ func TestScanAPI_GetScanLedgerUsage_OK(t *testing.T) {
 
 	url := ts.URL + scanroutes.Join(scanroutes.LedgerUsage) + "?kind=wallet"
 	resp := doAuthRequest(t, http.MethodGet, url, userID, nil)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
@@ -343,7 +343,7 @@ func TestScanAPI_ServiceAuthRequired(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401", resp.StatusCode)
 	}
@@ -363,7 +363,7 @@ func TestScanAPI_MissingUserIDHeader(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", resp.StatusCode)
 	}
@@ -376,7 +376,7 @@ func TestScanAPI_ListWalletScans_LatestRequiresAddress(t *testing.T) {
 
 	url := ts.URL + scanroutes.Join(scanroutes.WalletScans) + "?latest=true"
 	resp := doAuthRequest(t, http.MethodGet, url, uuid.New(), nil)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", resp.StatusCode)
 	}
@@ -399,7 +399,7 @@ func TestScanAPI_GetTLSScan_DefaultCatalog(t *testing.T) {
 	url := ts.URL + scanroutes.Join(scanroutes.TLSScanByID)
 	url = strings.Replace(url, "{scan_id}", scanID.String(), 1)
 	resp := doAuthRequest(t, http.MethodGet, url, uuid.New(), nil)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
@@ -418,7 +418,7 @@ func TestScanAPI_PutTLSPending_Created(t *testing.T) {
 		"endpoint": "https://example.com",
 	})
 	resp := doAuthRequest(t, http.MethodPost, ts.URL+scanroutes.Join(scanroutes.PendingTLS), userID, body)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("status = %d, want 201", resp.StatusCode)
 	}

@@ -250,6 +250,59 @@ func TestPostgresStore_walletAndScanReferenceCounts(t *testing.T) {
 	}
 }
 
+func TestPostgresStore_deleteDraftAndPolicy(t *testing.T) {
+	db := openTestDB(t)
+	store := NewPostgresStore(db)
+
+	scope := OwnerScope{UserID: "user-del", TenantID: "t-del"}
+	scanID := uuid.New()
+	draftID := uuid.New()
+	wallet := "0x742d35cc6634c0532925a3b844bc454e4438f44e"
+
+	_, err := store.SaveDraft(scope, draftID, &scanID, map[string]any{
+		"policy_context": map[string]any{"wallet_address": wallet},
+	})
+	if err != nil {
+		t.Fatalf("SaveDraft: %v", err)
+	}
+	if err := store.DeleteDraft(scope, draftID); err != nil {
+		t.Fatalf("DeleteDraft: %v", err)
+	}
+	if _, err := store.GetDraft(scope, draftID); !errors.Is(err, ErrDraftNotFound) {
+		t.Fatalf("GetDraft after delete: want ErrDraftNotFound, got %v", err)
+	}
+
+	draftID2 := uuid.New()
+	_, err = store.SaveDraft(scope, draftID2, &scanID, map[string]any{
+		"policy_context": map[string]any{"wallet_address": wallet},
+	})
+	if err != nil {
+		t.Fatalf("SaveDraft for persist: %v", err)
+	}
+	result, err := store.PersistDraftOnce(scope, draftID2, PersistDraftInput{
+		WalletAddress: wallet,
+		ChainID:       1,
+		ScanID:        scanID,
+		VerifiedAt:    time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("PersistDraftOnce: %v", err)
+	}
+	if err := store.DeletePolicy(scope, result.PolicyID); err != nil {
+		t.Fatalf("DeletePolicy: %v", err)
+	}
+	if _, err := store.GetPolicy(scope, result.PolicyID); !errors.Is(err, ErrPolicyNotFound) {
+		t.Fatalf("GetPolicy after delete: want ErrPolicyNotFound, got %v", err)
+	}
+	scanCounts, err := store.CountPoliciesByScan(scope, scanID)
+	if err != nil {
+		t.Fatalf("CountPoliciesByScan after delete: %v", err)
+	}
+	if scanCounts.Count != 0 {
+		t.Fatalf("count after delete = %d, want 0", scanCounts.Count)
+	}
+}
+
 func openTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	dsn := os.Getenv("TEST_POSTGRES_DSN")
