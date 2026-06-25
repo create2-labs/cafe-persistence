@@ -69,3 +69,21 @@ func (c *RedisCache) SaveWalletFailure(ctx context.Context, userID uuid.UUID, ad
 	data, _ := json.Marshal(payload)
 	return c.redis.Set(ctx, key, data, scanResultTTL).Err()
 }
+
+// DeleteWalletScan removes the write-through cache key for user+address.
+func (c *RedisCache) DeleteWalletScan(ctx context.Context, userID uuid.UUID, address string) error {
+	key := walletKeyPrefix + userID.String() + ":" + address
+	if err := c.redis.Del(ctx, key).Err(); err != nil {
+		return fmt.Errorf("redis del wallet scan cache: %w", err)
+	}
+	return nil
+}
+
+// DeleteTLSScan removes the write-through cache key for user+url.
+func (c *RedisCache) DeleteTLSScan(ctx context.Context, userID uuid.UUID, url string) error {
+	key := tlsKeyPrefix + userID.String() + ":" + url
+	if err := c.redis.Del(ctx, key).Err(); err != nil {
+		return fmt.Errorf("redis del tls scan cache: %w", err)
+	}
+	return nil
+}
