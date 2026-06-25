@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -11,6 +12,8 @@ import (
 	"time"
 
 	"cafe-persistence/internal/config"
+	"cafe-persistence/internal/cpapi"
+	"cafe-persistence/internal/cpstore"
 	"cafe-persistence/internal/cpddl"
 	"cafe-persistence/internal/health"
 	"cafe-persistence/internal/persistence/handlers"
@@ -59,7 +62,7 @@ func main() {
 		log.Fatal().Err(err).Msg("scan schema migration failed")
 	}
 
-	// CP tables (PERS-D4). Postgres only — no HTTP handlers until D4b.
+	// CP tables (PERS-D4). Postgres only — HTTP handlers wired in PERS-D4b.
 	if err := cpddl.MigrateCPSchema(db.GetDB()); err != nil {
 		log.Fatal().Err(err).Msg("cp schema migration failed")
 	}
@@ -123,17 +126,21 @@ func main() {
 		cache,
 		cfgChain,
 	)
-	internalScanServer := scanapi.NewServer("0.0.0.0", internalPort, serviceToken, scanAPIHandler)
-	internalScanServer.Start()
+	cpAPIHandler := cpapi.NewHandler(cpstore.NewPostgresStore(db.GetDB()))
+	internalMux := http.NewServeMux()
+	scanapi.RegisterRoutes(internalMux, scanAPIHandler)
+	cpapi.RegisterRoutes(internalMux, cpAPIHandler)
+	internalServer := scanapi.NewServerFromMux("0.0.0.0", internalPort, serviceToken, internalMux)
+	internalServer.Start()
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_ = internalScanServer.Shutdown(shutdownCtx)
+		_ = internalServer.Shutdown(shutdownCtx)
 	}()
 	if serviceToken == "" {
-		log.Warn().Msg("CAFE_PERSISTENCE_SERVICE_TOKEN unset — internal scan API rejects all callers until configured")
+		log.Warn().Msg("CAFE_PERSISTENCE_SERVICE_TOKEN unset — internal HTTP API rejects all callers until configured")
 	} else {
-		log.Info().Str("port", internalPort).Msg("internal scan API listening")
+		log.Info().Str("port", internalPort).Msg("internal HTTP API listening (scan + CP)")
 	}
 
 	subs, err := persistenceNats.SubscribeScanEvents(nc, scanHandler)

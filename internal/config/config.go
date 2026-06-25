@@ -13,10 +13,10 @@ const (
 	// PersistenceHealthPort is the HTTP port for /health and /ready probes (PERS-D2b).
 	PersistenceHealthPort = "PERSISTENCE_HEALTH_PORT"
 
-	// PersistenceInternalHTTPPort is the internal scan API listener (PERS-D3a-impl).
+	// PersistenceInternalHTTPPort is the internal scan + CP API listener (PERS-D3a-impl / PERS-D4b).
 	PersistenceInternalHTTPPort = "PERSISTENCE_INTERNAL_HTTP_PORT"
 
-	// CafePersistenceServiceToken is the static bearer token for internal scan API (ADR §9.1).
+	// CafePersistenceServiceToken is the static bearer token for internal HTTP APIs (ADR §9.1 / §9.2).
 	// #nosec G101 -- configuration key name, not a hardcoded credential
 	CafePersistenceServiceToken = "CAFE_PERSISTENCE_SERVICE_TOKEN"
 

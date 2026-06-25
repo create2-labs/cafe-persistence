@@ -17,9 +17,8 @@ type Server struct {
 	srv *http.Server
 }
 
-// NewServer registers routes from openapi/internal/scan/v1.yaml on host:port.
-func NewServer(host, port string, serviceToken string, h *Handler) *Server {
-	mux := http.NewServeMux()
+// RegisterRoutes mounts scan handlers on mux (openapi/internal/scan/v1.yaml).
+func RegisterRoutes(mux *http.ServeMux, h *Handler) {
 	base := scanroutes.V1Base
 
 	register := func(method, rel string, fn http.HandlerFunc) {
@@ -41,7 +40,17 @@ func NewServer(host, port string, serviceToken string, h *Handler) *Server {
 	register("GET", scanroutes.TLSScanByID, h.GetTLSScan)
 	register("DELETE", scanroutes.TLSScanByID, h.DeleteTLSScan)
 	register("GET", scanroutes.LedgerUsage, h.GetScanLedgerUsage)
+}
 
+// NewServer registers scan routes on host:port.
+func NewServer(host, port string, serviceToken string, h *Handler) *Server {
+	mux := http.NewServeMux()
+	RegisterRoutes(mux, h)
+	return NewServerFromMux(host, port, serviceToken, mux)
+}
+
+// NewServerFromMux serves a pre-built mux (scan + CP routes) on host:port.
+func NewServerFromMux(host, port string, serviceToken string, mux *http.ServeMux) *Server {
 	addr := fmt.Sprintf("%s:%s", host, port)
 	s := &Server{
 		srv: &http.Server{
