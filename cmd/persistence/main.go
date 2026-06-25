@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"cafe-persistence/internal/config"
+	"cafe-persistence/internal/cpddl"
 	"cafe-persistence/internal/health"
 	"cafe-persistence/internal/persistence/handlers"
 	"cafe-persistence/internal/scanddl"
@@ -56,6 +57,11 @@ func main() {
 	// Scan tables (persistence owns these). Dev: reset Postgres volume if schema changes brutally.
 	if err := scanddl.MigrateScanSchema(db.GetDB()); err != nil {
 		log.Fatal().Err(err).Msg("scan schema migration failed")
+	}
+
+	// CP tables (PERS-D4). Postgres only — no HTTP handlers until D4b.
+	if err := cpddl.MigrateCPSchema(db.GetDB()); err != nil {
+		log.Fatal().Err(err).Msg("cp schema migration failed")
 	}
 
 	// Redis

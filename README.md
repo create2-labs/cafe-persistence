@@ -76,7 +76,121 @@ OpenAPI spec for service-to-service crypto policy storage (drafts, persist, poli
 
 **Consumers:** `cafe-crypto-policy-mgt` D5a+ (`CPM_STORE=persistence`); `cafe-discovery` D6b (existence-only refs).
 
-**Spec only** — no HTTP handlers (PERS-D4b), no Postgres CP tables (PERS-D4). Public `/api/cpm/v1` unchanged.
+**Spec only** — no HTTP handlers (PERS-D4b). Public `/api/cpm/v1` unchanged.
+
+## CP Postgres storage (PERS-D4)
+
+Owner-scoped crypto policy tables and writers (no HTTP — D4b wires handlers).  
+Voir [Schéma Postgres : rôle des migrations et des golden files](#schéma-postgres--rôle-des-migrations-et-des-golden-files) pour le pourquoi des migrations malgré l’absence de prod.
+
+| Artifact | Path |
+|----------|------|
+| Domain entities | `internal/domain/crypto_policy.go` |
+| DDL migrations | `internal/cpddl/migrate.go` |
+| Postgres store | `internal/cpstore/` |
+| DDL golden | `testdata/ddl/cp_indexes.golden` |
+
+**Tables:** `crypto_policy_drafts`, `crypto_policies`, `draft_persist_state` (ADR §8.4).
+
+Applied at boot from `cmd/persistence/main.go` after scan migrations.
+
+### Pourquoi trois tables ?
+
+Un modèle mono-table avec `status IN ('draft', 'persisted', 'superseded')` peut sembler suffisant. Le schéma CP en utilise trois parce qu’il reflète la sémantique CPM §8.2 (`OwnerScopedStore`) et les invariants du contrat `internal/cp/v1` (D3b-spec) : **brouillon modifiable**, **policy immuable**, **persist idempotent**.
+
+#### Vue d’ensemble
+
+| Table | Nature | Rôle |
+|-------|--------|------|
+| `crypto_policy_drafts` | Métier | Travail en cours (`server_draft`) — payload libre, upsert/delete, **pas** une CP officielle |
+| `crypto_policies` | Métier | CP durable après wallet-auth — colonnes d’audit, immuable après persist, `superseded` au remplacement |
+| `draft_persist_state` | Technique | Idempotence de `PersistDraftOnce` — lie `draft_id` → `policy_id` même après suppression du draft |
+
+```
+  PUT draft                    POST persist (idempotent)
+       │                              │
+       ▼                              ▼
+crypto_policy_drafts ─────────► crypto_policies
+       │                              ▲
+       │    draft_persist_state       │ (policy_id réservé / completed)
+       └──────────────────────────────┘
+```
+
+#### 1. `crypto_policy_drafts` — brouillon plateforme
+
+- Statut unique : `server_draft`.
+- Payload JSON modifiable (`UpsertDraft`).
+- Soft delete utilisateur (`deleted_at`).
+- **Supprimé** (hard delete) quand le persist réussit — comme le store mémoire CPM.
+- Compté séparément pour le guard **W1** (`draft_count` dans `/references/wallet`).
+- **Exclu** du guard **W3** et de `ListPoliciesByScan` (seules les policies comptent).
+
+L’adresse wallet est souvent **dans le JSON** (`policy_context`, etc.) et extraite à la volée ; pas besoin des colonnes d’audit indexées d’une policy persistée.
+
+#### 2. `crypto_policies` — CP officielle durable
+
+- Statuts : `persisted` (active) ou `superseded` (remplacée par un nouveau persist sur le même `scan_id`).
+- Colonnes dédiées + index **W1** : `wallet_address`, `chain_id`, `ownership_status`, `wallet_control_method`, `wallet_control_verified_at`, `persisted_at`.
+- **Immutabilité** (ADR §8.4.2) : après le premier `persisted`, le `payload` et les champs d’audit ne sont plus mis à jour ; un remplacement crée une **nouvelle** ligne et marque l’ancienne `superseded`.
+- Jamais de `signed_message` / `signature` en base (wallet-auth = CPM public API uniquement).
+- Comptée pour **W3** (`/references/scan`) et listée par `scan_id` (hors drafts).
+
+Séparer drafts et policies évite de mélanger lignes mutables et lignes immuables, et permet des index partiels ciblés :
+
+```sql
+-- ex. W1 sans scan JSON
+(user_id, wallet_address) WHERE status = 'persisted' AND deleted_at IS NULL
+```
+
+#### 3. `draft_persist_state` — idempotence persist-once
+
+Table technique calquée sur `draftPersisted map[string]draftPersistState` dans `OwnerScopedStore` (CPM).
+
+| Colonne | Rôle |
+|---------|------|
+| `draft_id` (PK) | Clé d’idempotence client (+ scope owner) |
+| `policy_id` | ID alloué au **premier** essai (réutilisé si retry avant completion) |
+| `completed` | `true` seulement après transaction persist réussie |
+| `persisted_at` | Horodatage du succès |
+| `user_id`, `tenant_id` | Scope owner |
+
+**Pourquoi une table à part ?** Après un persist réussi, le draft est **supprimé**. Sans `draft_persist_state`, un replay `POST /drafts/{draft_id}/persist` ne pourrait plus répondre **`409 DRAFT_ALREADY_PERSISTED`** de façon fiable.
+
+Sémantique (ADR §5.5, D3b-spec) :
+
+1. **Premier succès** : réserve `policy_id`, écrit `crypto_policies`, `completed = true`, supprime le draft.
+2. **Replay après succès** → `409` (même si le draft n’existe plus).
+3. **Échec avant completion** : retry avec le **même** `draft_id` réutilise le **même** `policy_id` (pas de double policy).
+
+L’ADR §8.4.3 mentionne l’alternative « colonnes sur `crypto_policy_drafts` », mais elle ne tient pas si le draft est retiré au succès — d’où la table dédiée.
+
+#### Ce qu’un seul `status` ne couvrirait pas proprement
+
+| Besoin | Mono-table `draft \| persisted \| superseded` | Trois tables actuelles |
+|--------|---------------------------------------------|-------------------------|
+| Draft supprimé après persist + replay 409 | Nécessite de garder le draft ou un hack | `draft_persist_state` survit au draft |
+| Immutabilité policy vs mutabilité draft | Risque d’update accidentel sur une CP officielle | Séparation stricte |
+| W1 : `policy_count` + `draft_count` | Requêtes et index plus ambigus | Comptages distincts, index W1 sur policies |
+| W3 : policies seulement | Filtrage `status` partout | `crypto_policies` seule |
+| Retry mid-flight (même `policy_id`) | État intermédiaire difficile à modéliser | `completed = false` + `policy_id` réservé |
+
+**Référence métier :** `cafe-crypto-policy-mgt/docs/PERS_D3B_SPEC_REVIEW.md`, ADR persistence §8.4 et §5.5.
+
+### CP DDL verification
+
+```bash
+export POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=5432
+export POSTGRES_USER=cafe POSTGRES_PASSWORD=cafe POSTGRES_DATABASE=cafe POSTGRES_SSLMODE=disable
+
+go test -tags=integration ./internal/cpddl/...
+go test -tags=integration ./internal/cpstore/...
+```
+
+Regenerate index golden after DDL changes:
+
+```bash
+go run ./scripts/gen_cp_indexes_golden.go
+```
 
 ## Health probes (PERS-D2b)
 
@@ -89,7 +203,71 @@ Internal HTTP server (not exposed on public edge):
 
 Compose healthcheck uses `/ready` (see `cafe-deploy/compose/20-discovery.yml`).
 
+## Schéma Postgres : rôle des migrations et des golden files
+
+> **Contexte actuel :** rien n’est en prod côté persistence CP/scan ; en dev on peut **RAZ la DB** quand on veut (`docker volume rm`, `DROP SCHEMA public CASCADE`, etc.). Les migrations ici ne servent **pas** à préserver des données existantes.
+
+### Ce que “migrer” veut dire dans ce repo
+
+Au boot, `cafe-persistence` applique le schéma dont le code a besoin :
+
+1. GORM `AutoMigrate` (tables + colonnes de base)
+2. DDL SQL complémentaire (index partiels IMM/W1/W3, drops legacy, etc.)
+
+C’est invoqué depuis `cmd/persistence/main.go` (`scanddl.MigrateScanSchema`, `cpddl.MigrateCPSchema`).  
+**Migrer = créer ou aligner le schéma attendu**, pas “upgrader une prod vieille de N versions”.
+
+### Pourquoi c’est nécessaire même sans prod
+
+| Besoin | Sans migration au boot |
+|--------|-------------------------|
+| **Ownership ADR** — seul `cafe-persistence` crée les tables scan et CP ; Discovery et CPM n’ont plus (ou n’auront plus) de DDL local | Schéma créé à la main, scripts ops ad hoc, ou divergence entre services |
+| **Fresh install reproductible** — CI, machine locale, collègue, staging : Postgres vide à chaque run | Erreurs runtime (“relation does not exist”) ou schémas différents selon l’environnement |
+| **Contrat code ↔ base** — `PostgresStore`, writers scan, index W1/W3 supposent colonnes et index précis | Code et DB désalignés ; bugs silencieux (requêtes lentes, guards faux) |
+| **Jalons suivants** — D4b (HTTP CP), D5a (client CPM), D6b (refs Discovery) consomment un stockage déjà figé | DDL et API inventés en même temps, dette de coordination |
+
+La liberté de RAZ enlève la contrainte **“ne pas casser les données”**. Elle n’enlève pas le besoin d’un **schéma défini, owned par persistence, appliqué automatiquement**.
+
+### Golden files (`testdata/ddl/*.golden`)
+
+Un golden DDL est un **snapshot versionné** de ce que `pg_indexes` doit retourner après migration (noms d’index sur les tables scan ou CP).
+
+Les tests `-tags=integration` (`internal/scanddl/`, `internal/cpddl/`) :
+
+1. connectent Postgres (souvent vide) ;
+2. exécutent la migration ;
+3. listent les index ;
+4. comparent à `scan_indexes.golden` ou `cp_indexes.golden`.
+
+**But :** détecter un changement d’index non voulu (oubli, renommage, régression GORM) en CI — pas imposer une procédure de rollback prod.
+
+En dev, si tu changes volontairement le DDL : régénère le golden (`scripts/gen_scan_indexes_golden.go`, `scripts/gen_cp_indexes_golden.go`) et committe **code + golden dans la même PR**.
+
+### Ce dont on n’a pas besoin (pour l’instant)
+
+- Migrations incrémentales v1 → v2 → v3 avec préservation de données prod
+- Scripts de rollback opérationnel sur schéma live
+- Compatibilité avec une base legacy Discovery
+
+Quand la prod existera, on pourra introduire des migrations versionnées **si** le schéma doit évoluer sans RAZ. Aujourd’hui, changer le schéma = reset volume dev + merge du nouveau DDL.
+
+### RAZ dev (quand le schéma change brutalement)
+
+```bash
+# Exemple : conteneur compose
+docker compose -f compose/20-discovery.yml down
+docker volume rm <volume_postgres>   # nom selon stack cafe-deploy
+
+# Ou dans psql
+DROP SCHEMA public CASCADE;
+CREATE SCHEMA public;
+```
+
+Au prochain boot, `cafe-persistence` recrée tables et index via `Migrate*Schema`.
+
 ## DDL scan (ADR §14.5)
+
+> Rappel : [pourquoi migrer](#schéma-postgres--rôle-des-migrations-et-des-golden-files) même quand la DB dev est RAZ-able.
 
 ### Ownership
 
