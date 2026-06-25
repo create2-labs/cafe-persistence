@@ -38,6 +38,23 @@ Environment variables (or `config.yaml` via `CONFIG_PATH`):
 
 `config.yaml` must include `blockchains[].chain_id` for wallet observation export (CPM wire contract).
 
+## Internal scan API contract (PERS-D3a-spec)
+
+OpenAPI spec for service-to-service scan operations (pending, read/list, delete, ledger).
+**Spec only** in this jalon — HTTP handlers land in **PERS-D3a-impl**.
+
+| Artifact | Path |
+|----------|------|
+| OpenAPI | `openapi/internal/scan/v1.yaml` |
+| Route constants | `internal/scanroutes/routes.go` |
+| Contract tests | `internal/contract/scan_v1_openapi_test.go` |
+
+**Base path:** `/internal/scan/v1` on `PERSISTENCE_INTERNAL_HTTP_PORT` (default `8082`, distinct from health `8081`).
+
+**Auth:** `Authorization: Bearer <CAFE_PERSISTENCE_SERVICE_TOKEN>` plus caller-propagated `X-User-Id` / optional `X-Tenant-Id` (ADR §9.1). Not exposed on public NGINX edge.
+
+**Consumer:** `cafe-discovery` D6a-* milestones map public `/api/discovery/v1` to this contract.
+
 ## Health probes (PERS-D2b)
 
 Internal HTTP server (not exposed on public edge):
