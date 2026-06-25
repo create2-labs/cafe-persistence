@@ -18,6 +18,7 @@ import (
 	persistenceNats "cafe-persistence/internal/persistence/nats"
 	persistenceStorage "cafe-persistence/internal/persistence/storage"
 	"cafe-persistence/internal/repository"
+	"cafe-persistence/internal/scanapi"
 	natsconn "cafe-persistence/pkg/nats"
 	postgresdb "cafe-persistence/pkg/postgres"
 	redisconn "cafe-persistence/pkg/redis"
@@ -97,6 +98,37 @@ func main() {
 		tlsWriter, walletWriter, cache, nc, cfgChain.ChainIDByNetwork(),
 		db.GetDB(), ledgerRepo, planLimits,
 	)
+
+	// Internal scan HTTP API (PERS-D3a-impl) — not exposed on public edge.
+	internalPort := viper.GetString(config.PersistenceInternalHTTPPort)
+	if internalPort == "" {
+		internalPort = "8082"
+	}
+	serviceToken := strings.TrimSpace(viper.GetString(config.CafePersistenceServiceToken))
+	pendingRepo, err := repository.NewRedisPendingV1ScanRepository(redis)
+	if err != nil {
+		log.Fatal().Err(err).Msg("pending v1 scan repository init failed")
+	}
+	scanAPIHandler := scanapi.NewHandler(
+		pendingRepo,
+		repository.NewScanResultRepository(db.GetDB()),
+		repository.NewTLSScanResultRepository(db.GetDB()),
+		ledgerRepo,
+		cache,
+		cfgChain,
+	)
+	internalScanServer := scanapi.NewServer("0.0.0.0", internalPort, serviceToken, scanAPIHandler)
+	internalScanServer.Start()
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = internalScanServer.Shutdown(shutdownCtx)
+	}()
+	if serviceToken == "" {
+		log.Warn().Msg("CAFE_PERSISTENCE_SERVICE_TOKEN unset — internal scan API rejects all callers until configured")
+	} else {
+		log.Info().Str("port", internalPort).Msg("internal scan API listening")
+	}
 
 	subs, err := persistenceNats.SubscribeScanEvents(nc, scanHandler)
 	if err != nil {

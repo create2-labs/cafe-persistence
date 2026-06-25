@@ -35,19 +35,22 @@ Environment variables (or `config.yaml` via `CONFIG_PATH`):
 | `REDIS_URL` | `redis://localhost:6379` |
 | `LOG_LEVEL` | `info` |
 | `PERSISTENCE_HEALTH_PORT` | `8081` (HTTP `/health`, `/ready` — PERS-D2b) |
+| `PERSISTENCE_INTERNAL_HTTP_PORT` | `8082` (internal scan API — PERS-D3a-impl) |
+| `CAFE_PERSISTENCE_SERVICE_TOKEN` | *(unset — internal API rejects all callers until set)* |
 
 `config.yaml` must include `blockchains[].chain_id` for wallet observation export (CPM wire contract).
 
-## Internal scan API contract (PERS-D3a-spec)
+## Internal scan API contract (PERS-D3a-spec / PERS-D3a-impl)
 
-OpenAPI spec for service-to-service scan operations (pending, read/list, delete, ledger).
-**Spec only** in this jalon — HTTP handlers land in **PERS-D3a-impl**.
+OpenAPI spec and HTTP handlers for service-to-service scan operations (pending, read/list, delete, ledger).
 
 | Artifact | Path |
 |----------|------|
 | OpenAPI | `openapi/internal/scan/v1.yaml` |
 | Route constants | `internal/scanroutes/routes.go` |
-| Contract tests | `internal/contract/scan_v1_openapi_test.go` |
+| Contract tests (spec) | `internal/contract/scan_v1_openapi_test.go` |
+| HTTP handlers | `internal/scanapi/` |
+| Handler contract tests | `internal/scanapi/handler_test.go` |
 
 **Base path:** `/internal/scan/v1` on `PERSISTENCE_INTERNAL_HTTP_PORT` (default `8082`, distinct from health `8081`).
 

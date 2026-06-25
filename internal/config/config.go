@@ -13,6 +13,13 @@ const (
 	// PersistenceHealthPort is the HTTP port for /health and /ready probes (PERS-D2b).
 	PersistenceHealthPort = "PERSISTENCE_HEALTH_PORT"
 
+	// PersistenceInternalHTTPPort is the internal scan API listener (PERS-D3a-impl).
+	PersistenceInternalHTTPPort = "PERSISTENCE_INTERNAL_HTTP_PORT"
+
+	// CafePersistenceServiceToken is the static bearer token for internal scan API (ADR §9.1).
+	// #nosec G101 -- configuration key name, not a hardcoded credential
+	CafePersistenceServiceToken = "CAFE_PERSISTENCE_SERVICE_TOKEN"
+
 	// PostgreSQL configuration
 	PostgreSQLHost = "POSTGRES_HOST"
 	PostgreSQLPort = "POSTGRES_PORT"
@@ -85,7 +92,8 @@ const (
 	defaultServerHost         = "0.0.0.0"
 	defaultServerPort         = "8080"
 	defaultScannerHealthPort     = "8081"
-	defaultPersistenceHealthPort = "8081"
+	defaultPersistenceHealthPort     = "8081"
+	defaultPersistenceInternalHTTPPort = "8082"
 	defaultCORSAllowOrigins   = "http://localhost:3000,http://localhost:3001,http://localhost:5173"
 	defaultCORSAllowMethods   = "GET,POST,PUT,DELETE,OPTIONS"
 	// Cloudflare Turnstile development keys (always pass verification)
@@ -111,7 +119,8 @@ func GetDefaultConfigValues() map[string]any {
 		ServerHost:               defaultServerHost,
 		ServerPort:               defaultServerPort,
 		ScannerHealthPort:        defaultScannerHealthPort,
-		PersistenceHealthPort:    defaultPersistenceHealthPort,
+		PersistenceHealthPort:        defaultPersistenceHealthPort,
+		PersistenceInternalHTTPPort:  defaultPersistenceInternalHTTPPort,
 		MoralisAPIKey:            defaultMoralisAPIKey,
 		MoralisAPIURL:            defaultMoralisAPIURL,
 		CORSAllowOrigins:         defaultCORSAllowOrigins,
