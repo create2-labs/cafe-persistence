@@ -1,0 +1,814 @@
+openapi: 3.0.3
+info:
+  title: CAFE Persistence — internal scan API
+  version: "1.0.0"
+  license:
+    name: Proprietary
+    url: https://example.com/license
+  description: |
+    **PERS-D3a-spec** — service-to-service contract for scan data-plane operations in
+    `cafe-persistence`. Complements the async NATS lifecycle (`scan.started`, `scan.completed`,
+    `scan.failed`); does **not** replace NATS for scanner execution.
+
+    **Consumers:** `cafe-discovery` API (D6a-read / D6a-delete / D6a-pending).
+
+    **Non-goals (this milestone):** HTTP handlers, edge NGINX routes, module CP (`internal/cp/v1`),
+    changes to public `/api/discovery/v1` (`discovery-v1.yaml`).
+
+    **URL prefix (in-cluster):** `/internal/scan/v1` on the persistence internal HTTP listener
+    (`PERSISTENCE_INTERNAL_HTTP_PORT`, default `8082`). **Not** exposed on the public product edge.
+    Health/readiness probes remain on `PERSISTENCE_HEALTH_PORT` (`/health`, `/ready`).
+
+    **Auth:** static platform bearer token (`CAFE_PERSISTENCE_SERVICE_TOKEN`). Callers derive
+    `user_id` / `tenant_id` from the end-user JWT and propagate them via headers — **never** from
+    an untrusted client body. See ADR persistence §9.1.
+
+    **Status vocabulary:** persistence-native lifecycle values (`PENDING`, `RUNNING`, `SUCCESS`,
+    `FAILED`, `TIMEOUT`, `UNREACHABLE`, empty). Discovery maps these to public v1
+    (`requested` / `started` / `completed` / `failed`).
+
+servers:
+  - url: http://cafe-persistence:{internal_port}/internal/scan/v1
+    description: Docker / K8s service mesh (not public edge).
+    variables:
+      internal_port:
+        default: "8082"
+        description: "PERSISTENCE_INTERNAL_HTTP_PORT (distinct from health port 8081)."
+
+tags:
+  - name: pending
+    description: Short-lived Redis reservations before persistence rows exist (W8 / POST accept).
+  - name: wallet-scans
+    description: Owner-scoped wallet scan read/delete against Postgres (+ Redis cache invalidation).
+  - name: tls-scans
+    description: Owner TLS history and shared default catalog read/delete.
+  - name: ledger
+    description: Plan quota ledger reads (IMM-6b success + in-flight counts).
+
+security:
+  - serviceBearer: []
+
+paths:
+  /pending/wallet:
+    post:
+      tags: [pending]
+      summary: Reserve wallet pending scan (atomic per owner+address)
+      description: |
+        Mirrors `PendingV1ScanRepository.PutWallet` (Redis `SET NX` on
+        `discovery:v1:pending_wallet:{user_id}:{address}` plus `discovery:v1:pending_scan:{scan_id}`).
+
+        **409** when another wallet scan is already reserved for the same owner+address (W8).
+        Discovery rolls back the reservation when NATS publish fails after a successful reserve.
+      operationId: reserveWalletPending
+      parameters:
+        - $ref: "#/components/parameters/UserIdHeader"
+        - $ref: "#/components/parameters/TenantIdHeader"
+        - $ref: "#/components/parameters/RequestIdHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReserveWalletPendingRequest"
+      responses:
+        "201":
+          description: Reservation created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReservePendingResponse"
+        "409":
+          description: Wallet scan already in progress for this owner+address.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: SCAN_IN_PROGRESS
+                message: A wallet scan is already in progress for this target.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/ServiceUnauthorized"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+    get:
+      tags: [pending]
+      summary: Get wallet pending reservation by owner address
+      description: |
+        Mirrors `GetWalletByOwnerAddress`. Returns the pending record when the address key or
+        correlated `pending_scan` payload exists. Used by Discovery W8 in-flight checks.
+      operationId: getWalletPendingByAddress
+      parameters:
+        - $ref: "#/components/parameters/UserIdHeader"
+        - $ref: "#/components/parameters/TenantIdHeader"
+        - $ref: "#/components/parameters/RequestIdHeader"
+        - name: address
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Normalized Ethereum address (lowercase hex).
+      responses:
+        "200":
+          description: Pending record (may be address-key only when scan payload expired).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PendingScanRecord"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/ServiceUnauthorized"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+    delete:
+      tags: [pending]
+      summary: Release wallet address reservation (compare-and-delete)
+      description: |
+        Mirrors `DeleteWalletReservation` — deletes the address key only when its value equals
+        `scan_id` (Redis Lua compare-and-delete).
+      operationId: releaseWalletPendingReservation
+      parameters:
+        - $ref: "#/components/parameters/UserIdHeader"
+        - $ref: "#/components/parameters/TenantIdHeader"
+        - $ref: "#/components/parameters/RequestIdHeader"
+        - name: address
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: scan_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: Reservation released (or key absent / mismatched — idempotent no-op).
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/ServiceUnauthorized"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /pending/tls:
+    post:
+      tags: [pending]
+      summary: Store TLS pending scan correlation
+      description: |
+        Mirrors `PendingV1ScanRepository.Put` for TLS family (no per-endpoint NX reservation).
+      operationId: putTlsPending
+      parameters:
+        - $ref: "#/components/parameters/UserIdHeader"
+        - $ref: "#/components/parameters/TenantIdHeader"
+        - $ref: "#/components/parameters/RequestIdHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PutTlsPendingRequest"
+      responses:
+        "201":
+          description: Pending record stored.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PendingScanRecord"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/ServiceUnauthorized"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /pending/{scan_id}:
+    parameters:
+      - $ref: "#/components/parameters/ScanId"
+    get:
+      tags: [pending]
+      summary: Get pending scan by scan_id
+      operationId: getPendingScan
+      parameters:
+        - $ref: "#/components/parameters/UserIdHeader"
+        - $ref: "#/components/parameters/TenantIdHeader"
+        - $ref: "#/components/parameters/RequestIdHeader"
+      responses:
+        "200":
+          description: Pending record for scan_id.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PendingScanRecord"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/ServiceUnauthorized"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+    delete:
+      tags: [pending]
+      summary: Release pending scan correlation
+      description: |
+        Mirrors `Delete` — removes `discovery:v1:pending_scan:{scan_id}` and, for wallet family,
+        the correlated address reservation when present.
+      operationId: releasePendingScan
+      parameters:
+        - $ref: "#/components/parameters/UserIdHeader"
+        - $ref: "#/components/parameters/TenantIdHeader"
+        - $ref: "#/components/parameters/RequestIdHeader"
+      responses:
+        "204":
+          description: Pending keys removed (idempotent).
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/ServiceUnauthorized"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /wallets/scans:
+    get:
+      tags: [wallet-scans]
+      summary: List owner wallet scans (persistence rows)
+      description: |
+        Owner-scoped Postgres list with the same filter semantics as public
+        `GET /api/discovery/v1/wallets/scans`. Returns **persistence-native** rows; Discovery
+        maps list items to public `ScanListItem` lifecycle synopsis.
+      operationId: listWalletScans
+      parameters:
+        - $ref: "#/components/parameters/UserIdHeader"
+        - $ref: "#/components/parameters/TenantIdHeader"
+        - $ref: "#/components/parameters/RequestIdHeader"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+        - name: address
+          in: query
+          schema:
+            type: string
+          description: Filter by normalized Ethereum address.
+        - name: chain_id
+          in: query
+          schema:
+            type: integer
+            format: int64
+          description: Requires address query param; filters rows whose networks include the chain.
+        - name: latest
+          in: query
+          schema:
+            type: boolean
+          description: When true with address, return at most one newest completed-success row.
+      responses:
+        "200":
+          description: Paginated wallet scan rows.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedWalletScanRows"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/ServiceUnauthorized"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /wallets/scans/{scan_id}:
+    parameters:
+      - $ref: "#/components/parameters/ScanId"
+    get:
+      tags: [wallet-scans]
+      summary: Get owner wallet scan row by scan_id
+      operationId: getWalletScan
+      parameters:
+        - $ref: "#/components/parameters/UserIdHeader"
+        - $ref: "#/components/parameters/TenantIdHeader"
+        - $ref: "#/components/parameters/RequestIdHeader"
+      responses:
+        "200":
+          description: Wallet scan persistence row (404 when not owner-scoped).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WalletScanRow"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/ServiceUnauthorized"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+    delete:
+      tags: [wallet-scans]
+      summary: Delete owner wallet scan row
+      description: |
+        Soft-deletes the Postgres row and clears correlated Redis cache keys when this was the
+        last row for the address. **Does not** perform W3 policy reference checks — Discovery
+        guards immutability before calling this endpoint (ADR §9.3).
+      operationId: deleteWalletScan
+      parameters:
+        - $ref: "#/components/parameters/UserIdHeader"
+        - $ref: "#/components/parameters/TenantIdHeader"
+        - $ref: "#/components/parameters/RequestIdHeader"
+      responses:
+        "204":
+          description: Row deleted.
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/ServiceUnauthorized"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /tls/scans:
+    get:
+      tags: [tls-scans]
+      summary: List owner TLS scans (non-default rows)
+      operationId: listTlsScans
+      parameters:
+        - $ref: "#/components/parameters/UserIdHeader"
+        - $ref: "#/components/parameters/TenantIdHeader"
+        - $ref: "#/components/parameters/RequestIdHeader"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: Paginated owner TLS scan rows (default=false).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedTlsScanRows"
+        "401":
+          $ref: "#/components/responses/ServiceUnauthorized"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /tls/scans/defaults:
+    get:
+      tags: [tls-scans]
+      summary: List shared default TLS catalog rows
+      operationId: listTlsDefaultScans
+      parameters:
+        - $ref: "#/components/parameters/UserIdHeader"
+        - $ref: "#/components/parameters/TenantIdHeader"
+        - $ref: "#/components/parameters/RequestIdHeader"
+      responses:
+        "200":
+          description: Shared catalog (default=true), not owner-scoped.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedTlsScanRows"
+        "401":
+          $ref: "#/components/responses/ServiceUnauthorized"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /tls/scans/{scan_id}:
+    parameters:
+      - $ref: "#/components/parameters/ScanId"
+    get:
+      tags: [tls-scans]
+      summary: Get TLS scan row by scan_id
+      description: |
+        Resolves owner rows and shared catalog defaults (`default=true`) by `scan_id`, matching
+        public Discovery GET semantics.
+      operationId: getTlsScan
+      parameters:
+        - $ref: "#/components/parameters/UserIdHeader"
+        - $ref: "#/components/parameters/TenantIdHeader"
+        - $ref: "#/components/parameters/RequestIdHeader"
+      responses:
+        "200":
+          description: TLS scan persistence row.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TlsScanRow"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/ServiceUnauthorized"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+    delete:
+      tags: [tls-scans]
+      summary: Delete owner TLS scan row
+      description: |
+        Soft-deletes an owner TLS row (`default=false`). **Does not** perform W3 policy checks.
+      operationId: deleteTlsScan
+      parameters:
+        - $ref: "#/components/parameters/UserIdHeader"
+        - $ref: "#/components/parameters/TenantIdHeader"
+        - $ref: "#/components/parameters/RequestIdHeader"
+      responses:
+        "204":
+          description: Row deleted.
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/ServiceUnauthorized"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /ledger/usage:
+    get:
+      tags: [ledger]
+      summary: Read plan quota ledger counters for a user
+      description: |
+        Exposes `ScanUsageLedgerRepository` counts used by Discovery `CheckPostScanQuota`
+        (IMM-6b G1 success + in-flight, G2 parallel cap). Plan limits remain in Discovery
+        identity plane; persistence returns factual counts only.
+      operationId: getScanLedgerUsage
+      parameters:
+        - $ref: "#/components/parameters/UserIdHeader"
+        - $ref: "#/components/parameters/TenantIdHeader"
+        - $ref: "#/components/parameters/RequestIdHeader"
+        - name: kind
+          in: query
+          required: true
+          schema:
+            $ref: "#/components/schemas/ScanUsageKind"
+      responses:
+        "200":
+          description: Ledger counters for the user/kind bucket.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScanLedgerUsage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/ServiceUnauthorized"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+components:
+  securitySchemes:
+    serviceBearer:
+      type: http
+      scheme: bearer
+      description: |
+        Platform service token (`CAFE_PERSISTENCE_SERVICE_TOKEN`). Constant-time comparison
+        on the server. Temporary placeholder until mTLS or signed service JWT (ADR §9.1).
+
+  parameters:
+    UserIdHeader:
+      name: X-User-Id
+      in: header
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: End-user owner id derived from the caller's validated JWT.
+    TenantIdHeader:
+      name: X-Tenant-Id
+      in: header
+      required: false
+      schema:
+        type: string
+      description: Optional tenant scope propagated from the caller.
+    RequestIdHeader:
+      name: X-Request-Id
+      in: header
+      required: false
+      schema:
+        type: string
+      description: Correlation id echoed on error responses when provided.
+    ScanId:
+      name: scan_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+    Offset:
+      name: offset
+      in: query
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+
+  responses:
+    BadRequest:
+      description: Invalid request.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    NotFound:
+      description: Resource not found for the scoped owner.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    ServiceUnauthorized:
+      description: Missing or invalid service bearer token.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ServiceAuthError"
+    ServiceUnavailable:
+      description: Persistence data plane temporarily unavailable.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
+  schemas:
+    ScanFamily:
+      type: string
+      enum: [wallet, tls]
+
+    ScanUsageKind:
+      type: string
+      enum: [wallet, endpoint]
+      description: Plan quota bucket (endpoint = TLS scans).
+
+    PersistenceScanStatus:
+      type: string
+      enum: ["", "PENDING", "RUNNING", "SUCCESS", "FAILED", "TIMEOUT", "UNREACHABLE"]
+      description: Native Postgres/Redis status before Discovery public lifecycle mapping.
+
+    ErrorResponse:
+      type: object
+      required: [error, message]
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+
+    ServiceAuthError:
+      type: object
+      required: [error, message]
+      properties:
+        error:
+          type: string
+          enum: [service_auth_required]
+        message:
+          type: string
+
+    PendingScanRecord:
+      type: object
+      required: [scan_id, user_id, family, created_at]
+      properties:
+        scan_id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        family:
+          $ref: "#/components/schemas/ScanFamily"
+        address:
+          type: string
+          description: Present when family=wallet.
+        endpoint:
+          type: string
+          description: Present when family=tls.
+        created_at:
+          type: string
+          format: date-time
+
+    ReserveWalletPendingRequest:
+      type: object
+      required: [scan_id, address]
+      properties:
+        scan_id:
+          type: string
+          format: uuid
+        address:
+          type: string
+          description: Normalized Ethereum address.
+        created_at:
+          type: string
+          format: date-time
+          description: Defaults to server UTC now when omitted.
+
+    PutTlsPendingRequest:
+      type: object
+      required: [scan_id, endpoint]
+      properties:
+        scan_id:
+          type: string
+          format: uuid
+        endpoint:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    ReservePendingResponse:
+      type: object
+      required: [reserved, record]
+      properties:
+        reserved:
+          type: boolean
+          description: True when the address reservation was created (SET NX succeeded).
+        record:
+          $ref: "#/components/schemas/PendingScanRecord"
+
+    PaginationEnvelope:
+      type: object
+      required: [total, limit, offset]
+      properties:
+        total:
+          type: integer
+          minimum: 0
+        limit:
+          type: integer
+          minimum: 1
+        offset:
+          type: integer
+          minimum: 0
+
+    WalletScanRow:
+      type: object
+      required: [id, user_id, address, status, created_at, updated_at]
+      description: |
+        Persistence projection of `scan_results` (GORM `ScanResultEntity`). Discovery maps
+        `status` and nested fields to public `WalletScanDetail` / `WalletScanResult`.
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Same value as public scan_id.
+        user_id:
+          type: string
+          format: uuid
+        address:
+          type: string
+        type:
+          type: string
+        algorithm:
+          type: string
+        nist_level:
+          type: integer
+        key_exposed:
+          type: boolean
+        public_key:
+          type: string
+        transaction_hash:
+          type: string
+        exposed_network:
+          type: string
+        is_eoa:
+          type: boolean
+        is_erc4337:
+          type: boolean
+        risk_score:
+          type: number
+          format: double
+        networks:
+          type: string
+          description: JSON-encoded string array stored in Postgres.
+        connections:
+          type: string
+          description: JSON-encoded string array stored in Postgres.
+        status:
+          $ref: "#/components/schemas/PersistenceScanStatus"
+        error:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    TlsScanRow:
+      type: object
+      required: [id, url, host, port, status, created_at, updated_at]
+      description: Persistence projection of tls_scan_results (TLSScanResultEntity).
+      properties:
+        id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: Null for shared catalog defaults.
+        url:
+          type: string
+        host:
+          type: string
+        port:
+          type: integer
+        protocol_version:
+          type: string
+        nist_level:
+          type: integer
+        risk_score:
+          type: number
+          format: double
+        pqc_risk:
+          type: string
+        kex_algorithm:
+          type: string
+        kex_pqc_ready:
+          type: boolean
+        pqc_mode:
+          type: string
+        pfs:
+          type: boolean
+        alpn:
+          type: string
+        ocsp_stapled:
+          type: boolean
+        curve:
+          type: string
+        certificate:
+          type: string
+          description: JSON blob (certificate object).
+        cipher_suites:
+          type: string
+          description: JSON-encoded array.
+        supported_pqcs:
+          type: string
+        recommendations:
+          type: string
+        nist_levels:
+          type: string
+          description: JSON-encoded map.
+        default:
+          type: boolean
+        status:
+          $ref: "#/components/schemas/PersistenceScanStatus"
+        error:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    PaginatedWalletScanRows:
+      allOf:
+        - $ref: "#/components/schemas/PaginationEnvelope"
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items:
+                $ref: "#/components/schemas/WalletScanRow"
+
+    PaginatedTlsScanRows:
+      allOf:
+        - $ref: "#/components/schemas/PaginationEnvelope"
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items:
+                $ref: "#/components/schemas/TlsScanRow"
+
+    ScanLedgerUsage:
+      type: object
+      required: [user_id, kind, success_count, in_flight_count, visible_success_count]
+      properties:
+        user_id:
+          type: string
+          format: uuid
+        kind:
+          $ref: "#/components/schemas/ScanUsageKind"
+        success_count:
+          type: integer
+          minimum: 0
+          description: Rows in scan_usage_events for user/kind.
+        in_flight_count:
+          type: integer
+          minimum: 0
+          description: Wallet or TLS rows with status in PENDING/RUNNING/empty.
+        visible_success_count:
+          type: integer
+          minimum: 0
+          description: Terminal SUCCESS rows visible to quota (excludes soft-deleted).
