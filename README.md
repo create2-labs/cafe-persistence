@@ -21,6 +21,21 @@ go build -o persistence ./cmd/persistence/main.go
 docker build -f Dockerfile-persistence -t oleglod/cafe-persistence:local .
 ```
 
+### Analyse statique
+
+```bash
+golangci-lint run ./...
+```
+
+`deadcode` sans options ne suit que le binaire **production** (`main`) : le module CP (`internal/cpstore`) et les routes internes apparaissent « morts » tant qu’ils ne sont reliés qu’aux tests (`-test`) ou aux tests Postgres (`-tags=integration`).
+
+```bash
+# Couverture réaliste : tests unitaires + intégration CP
+deadcode -test -tags=integration ./...
+```
+
+Attendu aujourd’hui : **0 unreachable** après PERS-D4. Les handlers HTTP CP (PERS-D4b) brancheront `cpstore` depuis `main`.
+
 ## Configuration
 
 Environment variables (or `config.yaml` via `CONFIG_PATH`):
