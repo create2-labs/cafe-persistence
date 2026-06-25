@@ -58,6 +58,26 @@ OpenAPI spec and HTTP handlers for service-to-service scan operations (pending, 
 
 **Consumer:** `cafe-discovery` D6a-* milestones map public `/api/discovery/v1` to this contract.
 
+## Internal CP API contract (PERS-D3b-spec)
+
+OpenAPI spec for service-to-service crypto policy storage (drafts, persist, policies, W1/W3 references).
+
+| Artifact | Path |
+|----------|------|
+| OpenAPI | `openapi/internal/cp/v1.yaml` |
+| Route constants | `internal/cproutes/routes.go` |
+| Contract tests (spec) | `internal/contract/cp_v1_openapi_test.go` |
+
+**Base path:** `/internal/cp/v1` on `PERSISTENCE_INTERNAL_HTTP_PORT` (default `8082`, same listener as scan).
+
+**Auth:** same as scan — `Authorization: Bearer <CAFE_PERSISTENCE_SERVICE_TOKEN>` plus `X-User-Id` / optional `X-Tenant-Id` (ADR §9.2).
+
+**Semantic ownership:** CPM §8.2 (payload, statuses, persist-once). CPM review: `cafe-crypto-policy-mgt/docs/PERS_D3B_SPEC_REVIEW.md`.
+
+**Consumers:** `cafe-crypto-policy-mgt` D5a+ (`CPM_STORE=persistence`); `cafe-discovery` D6b (existence-only refs).
+
+**Spec only** — no HTTP handlers (PERS-D4b), no Postgres CP tables (PERS-D4). Public `/api/cpm/v1` unchanged.
+
 ## Health probes (PERS-D2b)
 
 Internal HTTP server (not exposed on public edge):
