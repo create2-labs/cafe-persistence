@@ -273,11 +273,15 @@ func (h *Handler) CountPoliciesByWallet(w http.ResponseWriter, r *http.Request) 
 		h.writeStoreError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"exists":        counts.Exists,
-		"policy_count":  counts.PolicyCount,
-		"draft_count":   counts.DraftCount,
-	})
+	body := map[string]any{
+		"exists":       counts.Exists,
+		"policy_count": counts.PolicyCount,
+		"draft_count":  counts.DraftCount,
+	}
+	if counts.PlatformDraftID != "" {
+		body["platform_draft_id"] = counts.PlatformDraftID
+	}
+	writeJSON(w, http.StatusOK, body)
 }
 
 func (h *Handler) CountPoliciesByScan(w http.ResponseWriter, r *http.Request) {

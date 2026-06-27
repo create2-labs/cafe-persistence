@@ -62,9 +62,10 @@ type PersistDraftResult struct {
 
 // WalletReferenceCount is the W1 existence projection.
 type WalletReferenceCount struct {
-	Exists       bool
-	PolicyCount  int64
-	DraftCount   int64
+	Exists           bool
+	PolicyCount      int64
+	DraftCount       int64
+	PlatformDraftID  string // set when DraftCount == 1 (CPM wallet-target-context UI)
 }
 
 // ScanReferenceCount is the W3 existence projection.
@@ -463,17 +464,24 @@ func (s *PostgresStore) CountPoliciesByWallet(scope OwnerScope, walletAddress st
 		return WalletReferenceCount{}, err
 	}
 	var draftCount int64
+	var platformDraftID string
 	for _, d := range drafts {
 		if walletTargetFromPayload(map[string]any(d.Payload)) == needle {
 			draftCount++
+			if draftCount == 1 {
+				platformDraftID = d.ID.String()
+			} else {
+				platformDraftID = ""
+			}
 		}
 	}
 
 	total := policyCount + draftCount
 	return WalletReferenceCount{
-		Exists:      total > 0,
-		PolicyCount: policyCount,
-		DraftCount:  draftCount,
+		Exists:          total > 0,
+		PolicyCount:     policyCount,
+		DraftCount:      draftCount,
+		PlatformDraftID: platformDraftID,
 	}, nil
 }
 

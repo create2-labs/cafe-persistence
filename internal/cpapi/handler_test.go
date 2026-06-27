@@ -280,6 +280,9 @@ func TestCpAPI_CountPoliciesByWallet(t *testing.T) {
 	if body["exists"] != true || body["draft_count"].(float64) != 1 {
 		t.Fatalf("wallet refs: %#v", body)
 	}
+	if body["platform_draft_id"] != draftID.String() {
+		t.Fatalf("platform_draft_id = %v, want %s", body["platform_draft_id"], draftID.String())
+	}
 }
 
 func TestCpAPI_ListPoliciesByScan(t *testing.T) {
