@@ -61,7 +61,7 @@ jobs:
           set -euo pipefail
           docker build \
             --target ci \
-            -f Dockerfile-persistence \
+            -f Dockerfile \
             -t cafe-persistence:ci .
 
       - name: Run persistence CI checks (inside CI image)
@@ -70,6 +70,6 @@ jobs:
       - name: Build runtime image
         run: |
           docker build \
-            -f Dockerfile-persistence \
+            -f Dockerfile \
             -t oleglod/cafe-persistence:ci-local \
             .

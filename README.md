@@ -18,7 +18,7 @@ Non-objectifs (PERS-D1) : pas de module CP, pas d'API HTTP publique, pas de migr
 ```bash
 go test ./...
 go build -o persistence ./cmd/persistence/main.go
-docker build -f Dockerfile-persistence -t oleglod/cafe-persistence:local .
+docker build -f Dockerfile -t oleglod/cafe-persistence:local .
 ```
 
 ### Analyse statique

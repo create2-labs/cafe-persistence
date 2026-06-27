@@ -77,7 +77,7 @@ jobs:
           docker buildx build \
             --load \
             --platform linux/amd64 \
-            -f Dockerfile-persistence \
+            -f Dockerfile \
             -t oleglod/cafe-persistence:scan-local \
             .
 
@@ -104,6 +104,6 @@ jobs:
             --platform linux/amd64,linux/arm64 \
             --cache-from type=gha \
             --cache-to type=gha,mode=max \
-            -f Dockerfile-persistence \
+            -f Dockerfile \
             $TAGS \
             --push .
