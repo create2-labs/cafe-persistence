@@ -128,6 +128,20 @@ WHERE status = 'persisted' AND deleted_at IS NULL
 - `payload_sha256` fourni dans le JSON `payload` est **ignoré / strip** ; la colonne request est stockée.
 - Comptée pour **W1** (`/references/wallet` → `exists` + `policy_count`, **pas** de `draft_count`) et **W3** (`/references/scan`).
 
+#### Pourquoi des colonnes d’audit ?
+
+Le persist est un **engagement wallet** (signature EOA vérifiée en CPM), pas un simple INSERT. Ces colonnes sont un **minimal durable sur la ligne policy** (pas un journal append-only) pour GET, réconciliation, support et forensics — **sans** stocker de matière crypto rejouable.
+
+| Colonne | Rôle |
+|---------|------|
+| `payload_sha256` | Réconcilier un **409** : retry réseau du même payload vs autre CP / conflit W1 (comparer au hash du client). Autorité serveur CPM. |
+| `signed_message_hash` | Attester qu’un message canonique a été vérifié, **sans** garder `signed_message` / `signature` bruts. |
+| `wallet_control_method` + `wallet_control_verified_at` | Comment / quand le contrôle wallet a été accepté (V1 : `eoa_signature`). |
+| `challenge_issued_at` / `challenge_expires_at` | Fenêtre du challenge **dérivée du message signé** (helper challenge stateless) — debug « signé hors fenêtre ? ». |
+| `chain_id` | Binding chain de la signature (aligné message canonique). |
+
+Sans `payload_sha256` + hashes d’audit, un litige « j’ai signé A, la base a B » ne laisse que le JSON `payload`.
+
 ```
   POST /internal/cp/v1/policies   (après challenge+sign CPM)
                  │
