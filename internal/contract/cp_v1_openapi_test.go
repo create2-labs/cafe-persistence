@@ -10,7 +10,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// PERS-D3b-spec OpenAPI contract checks (openapi/internal/cp/v1.yaml).
+// OpenAPI contract checks (openapi/internal/cp/v1.yaml) — RD-P3 policy-only.
 func TestCpV1OpenAPI_RequiredPathsDocumented(t *testing.T) {
 	spec := loadCpV1OpenAPISpec(t)
 	paths, ok := spec["paths"].(map[string]any)
@@ -19,8 +19,6 @@ func TestCpV1OpenAPI_RequiredPathsDocumented(t *testing.T) {
 	}
 
 	for _, route := range []string{
-		cproutes.DraftByID,
-		cproutes.DraftPersist,
 		cproutes.PolicyByID,
 		cproutes.Policies,
 		cproutes.ReferenceWallet,
@@ -28,6 +26,11 @@ func TestCpV1OpenAPI_RequiredPathsDocumented(t *testing.T) {
 	} {
 		if _, ok := paths[route]; !ok {
 			t.Fatalf("openapi paths missing %q", route)
+		}
+	}
+	for route := range paths {
+		if strings.Contains(route, "draft") {
+			t.Fatalf("draft path must be removed from OpenAPI: %q", route)
 		}
 	}
 }
@@ -78,10 +81,8 @@ func TestCpV1OpenAPI_RequiredSchemasDocumented(t *testing.T) {
 	schemas := components["schemas"].(map[string]any)
 
 	for _, name := range []string{
-		"DraftRow",
-		"DraftUpsertBody",
-		"PersistDraftRequest",
-		"PersistDraftResponse",
+		"CreatePolicyRequest",
+		"CreatePolicyResponse",
 		"PolicyRow",
 		"WalletReferenceCount",
 		"ScanReferenceCount",
@@ -93,54 +94,53 @@ func TestCpV1OpenAPI_RequiredSchemasDocumented(t *testing.T) {
 			t.Fatalf("openapi schema missing %q", name)
 		}
 	}
-}
-
-func TestCpV1OpenAPI_DraftOperations(t *testing.T) {
-	spec := loadCpV1OpenAPISpec(t)
-	paths := spec["paths"].(map[string]any)
-
-	draft := paths[cproutes.DraftByID].(map[string]any)
-	for _, method := range []string{"put", "get", "delete"} {
-		if _, ok := draft[method]; !ok {
-			t.Fatalf("draft route missing %s", method)
+	for _, banned := range []string{"DraftRow", "DraftUpsertBody", "PersistDraftRequest", "PersistDraftResponse"} {
+		if _, ok := schemas[banned]; ok {
+			t.Fatalf("draft schema %q must be removed", banned)
 		}
 	}
-	put := draft["put"].(map[string]any)
-	if put["operationId"] != "upsertDraft" {
-		t.Fatalf("unexpected upsert operationId: %v", put["operationId"])
-	}
 }
 
-func TestCpV1OpenAPI_PersistDraftIdempotenceDocumented(t *testing.T) {
+func TestCpV1OpenAPI_CreatePolicyDocumented(t *testing.T) {
 	spec := loadCpV1OpenAPISpec(t)
 	paths := spec["paths"].(map[string]any)
-	persist := paths[cproutes.DraftPersist].(map[string]any)
-	post, ok := persist["post"].(map[string]any)
+	policies := paths[cproutes.Policies].(map[string]any)
+	post, ok := policies["post"].(map[string]any)
 	if !ok {
-		t.Fatal("POST persist missing")
+		t.Fatal("POST /policies missing")
 	}
-	if post["operationId"] != "persistDraft" {
+	if post["operationId"] != "createPolicy" {
 		t.Fatalf("unexpected operationId: %v", post["operationId"])
 	}
 	desc, _ := post["description"].(string)
 	lower := strings.ToLower(desc)
-	for _, needle := range []string{"idempotent", "draft_id", "409", "draft_already_persisted"} {
+	for _, needle := range []string{"payload_sha256", "409", "w1"} {
 		if !strings.Contains(lower, needle) {
-			t.Fatalf("persist description missing %q", needle)
+			t.Fatalf("createPolicy description missing %q", needle)
 		}
 	}
 
 	components := spec["components"].(map[string]any)
 	schemas := components["schemas"].(map[string]any)
-	req := schemas["PersistDraftRequest"].(map[string]any)
+	req := schemas["CreatePolicyRequest"].(map[string]any)
 	props := req["properties"].(map[string]any)
-	for _, field := range []string{"wallet_address", "chain_id", "scan_id", "wallet_control_verified_at"} {
+	for _, field := range []string{
+		"wallet_address", "chain_id", "scan_id", "payload", "payload_sha256", "wallet_control_verified_at",
+	} {
 		if _, ok := props[field]; !ok {
-			t.Fatalf("PersistDraftRequest missing %q", field)
+			t.Fatalf("CreatePolicyRequest missing %q", field)
 		}
 	}
 	if _, ok := props["signature"]; ok {
-		t.Fatal("PersistDraftRequest must not include signature (wallet auth stays in CPM)")
+		t.Fatal("CreatePolicyRequest must not include signature (wallet auth stays in CPM)")
+	}
+	row := schemas["PolicyRow"].(map[string]any)
+	rowProps := row["properties"].(map[string]any)
+	if _, ok := rowProps["payload_sha256"]; !ok {
+		t.Fatal("PolicyRow must expose payload_sha256")
+	}
+	if _, ok := rowProps["draft_id"]; ok {
+		t.Fatal("PolicyRow must not include draft_id")
 	}
 }
 
@@ -155,6 +155,13 @@ func TestCpV1OpenAPI_ReferenceEndpointsForW1W3(t *testing.T) {
 	}
 	if getWallet["operationId"] != "countPoliciesByWallet" {
 		t.Fatalf("unexpected wallet ref operationId: %v", getWallet["operationId"])
+	}
+
+	schemas := spec["components"].(map[string]any)["schemas"].(map[string]any)
+	wref := schemas["WalletReferenceCount"].(map[string]any)
+	wprops := wref["properties"].(map[string]any)
+	if _, ok := wprops["draft_count"]; ok {
+		t.Fatal("WalletReferenceCount must not include draft_count")
 	}
 
 	scan := paths[cproutes.ReferenceScan].(map[string]any)
@@ -173,15 +180,18 @@ func TestCpV1OpenAPI_DescriptionMentionsADR(t *testing.T) {
 	desc, _ := info["description"].(string)
 	lower := strings.ToLower(desc)
 	for _, needle := range []string{
-		"pers-d3b-spec",
 		"cpm",
-		"draft_id",
+		"payload_sha256",
 		"not",
 		"nginx",
+		"w1",
 	} {
 		if !strings.Contains(lower, needle) {
 			t.Fatalf("info.description missing %q", needle)
 		}
+	}
+	if strings.Contains(lower, "draft_id") && strings.Contains(lower, "idempotence key") {
+		t.Fatal("description must not present draft_id as idempotence key")
 	}
 }
 

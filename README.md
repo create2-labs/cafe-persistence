@@ -73,9 +73,9 @@ OpenAPI spec and HTTP handlers for service-to-service scan operations (pending, 
 
 **Consumer:** `cafe-discovery` D6a-* milestones map public `/api/discovery/v1` to this contract.
 
-## Internal CP API (PERS-D3b-spec / PERS-D4b)
+## Internal CP API (PERS-D3b-spec / PERS-D4b / RD-P3)
 
-OpenAPI spec and HTTP handlers for service-to-service crypto policy storage (drafts, persist, policies, W1/W3 references).
+OpenAPI spec and HTTP handlers for service-to-service crypto policy storage (create/get/delete policies, W1/W3 references).
 
 | Artifact | Path |
 |----------|------|
@@ -89,15 +89,15 @@ OpenAPI spec and HTTP handlers for service-to-service crypto policy storage (dra
 
 **Auth:** same as scan — `Authorization: Bearer <CAFE_PERSISTENCE_SERVICE_TOKEN>` plus `X-User-Id` / optional `X-Tenant-Id` (ADR §9.2). Not exposed on public NGINX edge.
 
-**Semantic ownership:** CPM §8.2 (payload, statuses, persist-once). CPM review: `cafe-crypto-policy-mgt/docs/PERS_D3B_SPEC_REVIEW.md`.
+**Semantic ownership:** CPM + [ADR_20260824_remove_cp_drafts](https://github.com/create2-labs/cafe-adr/blob/main/ADR_20260824_remove_cp_drafts.md) (payload hash, W1 unique, signed persist). CPM wires public `POST /api/cpm/v1/policies` in RD-P5; this service stores the durable row.
 
-**Consumers:** `cafe-crypto-policy-mgt` D5a+ (`CPM_STORE=persistence`); `cafe-discovery` D6b (existence-only refs).
+**Consumers:** `cafe-crypto-policy-mgt` (`CPM_STORE=persistence`); `cafe-discovery` (existence-only refs).
 
-Public `/api/cpm/v1` unchanged.
+**Breaking (RD-P3):** draft tables and `/drafts*` routes are removed. Old CPM draft clients against new persistence **fail** on purpose; RAZ of test policies is authorized.
 
-## CP Postgres storage (PERS-D4)
+## CP Postgres storage (PERS-D4 / RD-P3)
 
-Owner-scoped crypto policy tables and writers; HTTP handlers in `internal/cpapi` (PERS-D4b).  
+Owner-scoped crypto policy table and writers; HTTP handlers in `internal/cpapi`.  
 Voir [Schéma Postgres : rôle des migrations et des golden files](#schéma-postgres--rôle-des-migrations-et-des-golden-files) pour le pourquoi des migrations malgré l’absence de prod.
 
 | Artifact | Path |
@@ -107,91 +107,35 @@ Voir [Schéma Postgres : rôle des migrations et des golden files](#schéma-post
 | Postgres store | `internal/cpstore/` |
 | DDL golden | `testdata/ddl/cp_indexes.golden` |
 
-**Tables:** `crypto_policy_drafts`, `crypto_policies`, `draft_persist_state` (ADR §8.4).
+**Table:** `crypto_policies` only. Legacy `crypto_policy_drafts` and `draft_persist_state` are **dropped** at migrate (ADR_20260824 RD-P3 — voluntary break / RAZ).
 
 Applied at boot from `cmd/persistence/main.go` after scan migrations.
 
-### Pourquoi trois tables ?
+### `crypto_policies` — CP officielle durable
 
-Un modèle mono-table avec `status IN ('draft', 'persisted', 'superseded')` peut sembler suffisant. Le schéma CP en utilise trois parce qu’il reflète la sémantique CPM §8.2 (`OwnerScopedStore`) et les invariants du contrat `internal/cp/v1` (D3b-spec) : **brouillon modifiable**, **policy immuable**, **persist idempotent**.
-
-#### Vue d’ensemble
-
-| Table | Nature | Rôle |
-|-------|--------|------|
-| `crypto_policy_drafts` | Métier | Travail en cours (`server_draft`) — payload libre, upsert/delete, **pas** une CP officielle |
-| `crypto_policies` | Métier | CP durable après wallet-auth — colonnes d’audit, immuable après persist, `superseded` au remplacement |
-| `draft_persist_state` | Technique | Idempotence de `PersistDraftOnce` — lie `draft_id` → `policy_id` même après suppression du draft |
-
-```
-  PUT draft                    POST persist (idempotent)
-       │                              │
-       ▼                              ▼
-crypto_policy_drafts ─────────► crypto_policies
-       │                              ▲
-       │    draft_persist_state       │ (policy_id réservé / completed)
-       └──────────────────────────────┘
-```
-
-#### 1. `crypto_policy_drafts` — brouillon plateforme
-
-- Statut unique : `server_draft`.
-- Payload JSON modifiable (`UpsertDraft`).
-- Soft delete utilisateur (`deleted_at`).
-- **Supprimé** (hard delete) quand le persist réussit — comme le store mémoire CPM.
-- Compté séparément pour le guard **W1** (`draft_count` dans `/references/wallet`).
-- **Exclu** du guard **W3** et de `ListPoliciesByScan` (seules les policies comptent).
-
-L’adresse wallet est souvent **dans le JSON** (`policy_context`, etc.) et extraite à la volée ; pas besoin des colonnes d’audit indexées d’une policy persistée.
-
-#### 2. `crypto_policies` — CP officielle durable
-
-- Statuts : `persisted` (active) ou `superseded` (remplacée par un nouveau persist sur le même `scan_id`).
-- Colonnes dédiées + index **W1** : `wallet_address`, `chain_id`, `ownership_status`, `wallet_control_method`, `wallet_control_verified_at`, `persisted_at`.
-- **Immutabilité** (ADR §8.4.2) : après le premier `persisted`, le `payload` et les champs d’audit ne sont plus mis à jour ; un remplacement crée une **nouvelle** ligne et marque l’ancienne `superseded`.
-- Jamais de `signed_message` / `signature` en base (wallet-auth = CPM public API uniquement).
-- Comptée pour **W3** (`/references/scan`) et listée par `scan_id` (hors drafts).
-
-Séparer drafts et policies évite de mélanger lignes mutables et lignes immuables, et permet des index partiels ciblés :
+- Statut actif : `persisted` (soft-delete via `deleted_at`). Remplacement = **NB1** (DELETE puis nouveau create).
+- Colonnes métier + audit : `wallet_address`, `chain_id`, `payload`, **`payload_sha256`** (autorité serveur CPM), `signed_message_hash`, `wallet_control_*`, `challenge_issued_at` / `challenge_expires_at`, `persisted_at`.
+- **W1 unique** (index partial) :
 
 ```sql
--- ex. W1 sans scan JSON
-(user_id, wallet_address) WHERE status = 'persisted' AND deleted_at IS NULL
+UNIQUE (user_id, wallet_address)
+WHERE status = 'persisted' AND deleted_at IS NULL
+-- name: uidx_crypto_policies_user_wallet_active
 ```
 
-#### 3. `draft_persist_state` — idempotence persist-once
+- Double create active même owner+adresse → violation unique → HTTP **409** `POLICY_ALREADY_EXISTS`.
+- Jamais de `signed_message` / `signature` bruts en base (wallet-auth = CPM public API uniquement).
+- `payload_sha256` fourni dans le JSON `payload` est **ignoré / strip** ; la colonne request est stockée.
+- Comptée pour **W1** (`/references/wallet` → `exists` + `policy_count`, **pas** de `draft_count`) et **W3** (`/references/scan`).
 
-Table technique calquée sur `draftPersisted map[string]draftPersistState` dans `OwnerScopedStore` (CPM).
+```
+  POST /internal/cp/v1/policies   (après challenge+sign CPM)
+                 │
+                 ▼
+          crypto_policies
+```
 
-| Colonne | Rôle |
-|---------|------|
-| `draft_id` (PK) | Clé d’idempotence client (+ scope owner) |
-| `policy_id` | ID alloué au **premier** essai (réutilisé si retry avant completion) |
-| `completed` | `true` seulement après transaction persist réussie |
-| `persisted_at` | Horodatage du succès |
-| `user_id`, `tenant_id` | Scope owner |
-
-**Pourquoi une table à part ?** Après un persist réussi, le draft est **supprimé**. Sans `draft_persist_state`, un replay `POST /drafts/{draft_id}/persist` ne pourrait plus répondre **`409 DRAFT_ALREADY_PERSISTED`** de façon fiable.
-
-Sémantique (ADR §5.5, D3b-spec) :
-
-1. **Premier succès** : réserve `policy_id`, écrit `crypto_policies`, `completed = true`, supprime le draft.
-2. **Replay après succès** → `409` (même si le draft n’existe plus).
-3. **Échec avant completion** : retry avec le **même** `draft_id` réutilise le **même** `policy_id` (pas de double policy).
-
-L’ADR §8.4.3 mentionne l’alternative « colonnes sur `crypto_policy_drafts` », mais elle ne tient pas si le draft est retiré au succès — d’où la table dédiée.
-
-#### Ce qu’un seul `status` ne couvrirait pas proprement
-
-| Besoin | Mono-table `draft \| persisted \| superseded` | Trois tables actuelles |
-|--------|---------------------------------------------|-------------------------|
-| Draft supprimé après persist + replay 409 | Nécessite de garder le draft ou un hack | `draft_persist_state` survit au draft |
-| Immutabilité policy vs mutabilité draft | Risque d’update accidentel sur une CP officielle | Séparation stricte |
-| W1 : `policy_count` + `draft_count` | Requêtes et index plus ambigus | Comptages distincts, index W1 sur policies |
-| W3 : policies seulement | Filtrage `status` partout | `crypto_policies` seule |
-| Retry mid-flight (même `policy_id`) | État intermédiaire difficile à modéliser | `completed = false` + `policy_id` réservé |
-
-**Référence métier :** `cafe-crypto-policy-mgt/docs/PERS_D3B_SPEC_REVIEW.md`, ADR persistence §8.4 et §5.5.
+**Référence :** ADR_20260824_remove_cp_drafts §3.2.2 ; ADR persistence §8.4 (amendement RD-P14).
 
 ### CP DDL verification
 

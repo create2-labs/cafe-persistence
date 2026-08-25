@@ -26,6 +26,7 @@ var (
 	testUserID = uuid.MustParse("11111111-1111-4111-8111-111111111111")
 	testScanID = uuid.MustParse("550e8400-e29b-41d4-a716-446655440000")
 	testWallet = "0x742d35cc6634c0532925a3b844bc454e4438f44e"
+	testSHA    = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 )
 
 func setupCPAPITestDB(t *testing.T) *gorm.DB {
@@ -34,11 +35,7 @@ func setupCPAPITestDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
-	if err := db.AutoMigrate(
-		&domain.CryptoPolicyDraftEntity{},
-		&domain.CryptoPolicyEntity{},
-		&domain.DraftPersistStateEntity{},
-	); err != nil {
+	if err := cpddl.MigrateCPSchema(db); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	sqlDB, err := db.DB()
@@ -59,16 +56,6 @@ func newTestCPAPIServer(t *testing.T, db *gorm.DB) *httptest.Server {
 }
 
 func cpURL(base, rel string) string {
-	return base + cproutes.V1Base + rel
-}
-
-func cpURLWithDraft(base, draftID string) string {
-	rel := strings.ReplaceAll(cproutes.DraftByID, "{draft_id}", draftID)
-	return base + cproutes.V1Base + rel
-}
-
-func cpURLWithDraftPersist(base, draftID string) string {
-	rel := strings.ReplaceAll(cproutes.DraftPersist, "{draft_id}", draftID)
 	return base + cproutes.V1Base + rel
 }
 
@@ -118,44 +105,39 @@ func decodeJSONBody(t *testing.T, resp *http.Response, dst any) {
 	}
 }
 
-func TestCpAPI_DraftPersistGetPolicyLifecycle(t *testing.T) {
+func createPolicyBody(scanID uuid.UUID, wallet, sha string) []byte {
+	verifiedAt := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
+	issued := verifiedAt.Add(-time.Minute)
+	expires := verifiedAt.Add(9 * time.Minute)
+	body, _ := json.Marshal(map[string]any{
+		"scan_id":                     scanID.String(),
+		"wallet_address":              wallet,
+		"chain_id":                    1,
+		"payload":                     map[string]any{"mode": "strict", "signature": "raw"},
+		"payload_sha256":              sha,
+		"signed_message_hash":         "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		"wallet_control_method":       "eoa_signature",
+		"wallet_control_verified_at":  verifiedAt.Format(time.RFC3339Nano),
+		"challenge_issued_at":         issued.Format(time.RFC3339Nano),
+		"challenge_expires_at":        expires.Format(time.RFC3339Nano),
+	})
+	return body
+}
+
+func TestCpAPI_CreateGetPolicyLifecycle(t *testing.T) {
 	db := setupCPAPITestDB(t)
 	ts := newTestCPAPIServer(t, db)
 	defer ts.Close()
 
-	draftID := uuid.New()
-	upsertBody, _ := json.Marshal(map[string]any{
-		"scan_id": testScanID.String(),
-		"payload": map[string]any{
-			"policy_context": map[string]any{
-				"wallet_address": testWallet,
-				"wallet_type":    "eoa",
-			},
-			"mode": "strict",
-		},
-	})
-	resp := doAuthRequest(t, http.MethodPut, cpURLWithDraft(ts.URL, draftID.String()), testUserID, upsertBody)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("upsert draft: status = %d", resp.StatusCode)
+	resp := doAuthRequest(t, http.MethodPost, cpURL(ts.URL, cproutes.Policies), testUserID, createPolicyBody(testScanID, testWallet, testSHA))
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create policy: status = %d", resp.StatusCode)
 	}
-	_ = resp.Body.Close()
-
-	verifiedAt := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
-	persistBody, _ := json.Marshal(map[string]any{
-		"wallet_address":             testWallet,
-		"chain_id":                   1,
-		"scan_id":                    testScanID.String(),
-		"wallet_control_verified_at": verifiedAt.Format(time.RFC3339Nano),
-	})
-	resp = doAuthRequest(t, http.MethodPost, cpURLWithDraftPersist(ts.URL, draftID.String()), testUserID, persistBody)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("persist draft: status = %d", resp.StatusCode)
-	}
-	var persistResp map[string]any
-	decodeJSONBody(t, resp, &persistResp)
-	policyID, _ := persistResp["policy_id"].(string)
-	if policyID == "" {
-		t.Fatalf("missing policy_id: %#v", persistResp)
+	var createResp map[string]any
+	decodeJSONBody(t, resp, &createResp)
+	policyID, _ := createResp["policy_id"].(string)
+	if policyID == "" || createResp["payload_sha256"] != testSHA {
+		t.Fatalf("unexpected create response: %#v", createResp)
 	}
 
 	resp = doAuthRequest(t, http.MethodGet, cpURLWithPolicy(ts.URL, policyID), testUserID, nil)
@@ -164,48 +146,38 @@ func TestCpAPI_DraftPersistGetPolicyLifecycle(t *testing.T) {
 	}
 	var policy map[string]any
 	decodeJSONBody(t, resp, &policy)
-	if policy["status"] != "persisted" {
-		t.Fatalf("policy status = %#v", policy["status"])
+	if policy["status"] != "persisted" || policy["payload_sha256"] != testSHA {
+		t.Fatalf("policy = %#v", policy)
 	}
-	if _, ok := policy["signature"]; ok {
+	payload, _ := policy["payload"].(map[string]any)
+	if _, ok := payload["signature"]; ok {
 		t.Fatal("policy payload must not expose signature at HTTP layer")
+	}
+	if _, ok := policy["draft_id"]; ok {
+		t.Fatal("draft_id must not appear on policy rows")
 	}
 }
 
-func TestCpAPI_PersistReplayReturns409(t *testing.T) {
+func TestCpAPI_CreateDuplicateReturns409(t *testing.T) {
 	db := setupCPAPITestDB(t)
 	ts := newTestCPAPIServer(t, db)
 	defer ts.Close()
 
-	draftID := uuid.New()
-	upsertBody, _ := json.Marshal(map[string]any{
-		"scan_id": testScanID.String(),
-		"payload": map[string]any{
-			"policy_context": map[string]any{"wallet_address": testWallet, "wallet_type": "eoa"},
-		},
-	})
-	resp := doAuthRequest(t, http.MethodPut, cpURLWithDraft(ts.URL, draftID.String()), testUserID, upsertBody)
+	body := createPolicyBody(testScanID, testWallet, testSHA)
+	resp := doAuthRequest(t, http.MethodPost, cpURL(ts.URL, cproutes.Policies), testUserID, body)
 	_ = resp.Body.Close()
-
-	persistBody, _ := json.Marshal(map[string]any{
-		"wallet_address":             testWallet,
-		"chain_id":                   1,
-		"scan_id":                    testScanID.String(),
-		"wallet_control_verified_at": time.Now().UTC().Format(time.RFC3339Nano),
-	})
-	resp = doAuthRequest(t, http.MethodPost, cpURLWithDraftPersist(ts.URL, draftID.String()), testUserID, persistBody)
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("first persist: status = %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("first create: status = %d", resp.StatusCode)
 	}
 
-	resp = doAuthRequest(t, http.MethodPost, cpURLWithDraftPersist(ts.URL, draftID.String()), testUserID, persistBody)
+	body2 := createPolicyBody(uuid.New(), testWallet, "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
+	resp = doAuthRequest(t, http.MethodPost, cpURL(ts.URL, cproutes.Policies), testUserID, body2)
 	if resp.StatusCode != http.StatusConflict {
-		t.Fatalf("replay persist: status = %d, want 409", resp.StatusCode)
+		t.Fatalf("duplicate create: status = %d, want 409", resp.StatusCode)
 	}
 	var errBody map[string]string
 	decodeJSONBody(t, resp, &errBody)
-	if errBody["error"] != "DRAFT_ALREADY_PERSISTED" {
+	if errBody["error"] != "POLICY_ALREADY_EXISTS" {
 		t.Fatalf("error = %q", errBody["error"])
 	}
 }
@@ -215,44 +187,28 @@ func TestCpAPI_CountPoliciesByScan(t *testing.T) {
 	ts := newTestCPAPIServer(t, db)
 	defer ts.Close()
 
-	draftID := uuid.New()
-	upsertBody, _ := json.Marshal(map[string]any{
-		"scan_id": testScanID.String(),
-		"payload": map[string]any{
-			"policy_context": map[string]any{"wallet_address": testWallet, "wallet_type": "eoa"},
-		},
-	})
-	resp := doAuthRequest(t, http.MethodPut, cpURLWithDraft(ts.URL, draftID.String()), testUserID, upsertBody)
-	_ = resp.Body.Close()
-
 	countURL := cpURL(ts.URL, cproutes.ReferenceScan) + "?scan_id=" + testScanID.String()
-	resp = doAuthRequest(t, http.MethodGet, countURL, testUserID, nil)
+	resp := doAuthRequest(t, http.MethodGet, countURL, testUserID, nil)
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("count before persist: status = %d", resp.StatusCode)
+		t.Fatalf("count before create: status = %d", resp.StatusCode)
 	}
 	var before map[string]any
 	decodeJSONBody(t, resp, &before)
 	if before["referenced"] != false || before["count"].(float64) != 0 {
-		t.Fatalf("before persist: %#v", before)
+		t.Fatalf("before create: %#v", before)
 	}
 
-	persistBody, _ := json.Marshal(map[string]any{
-		"wallet_address":             testWallet,
-		"chain_id":                   1,
-		"scan_id":                    testScanID.String(),
-		"wallet_control_verified_at": time.Now().UTC().Format(time.RFC3339Nano),
-	})
-	resp = doAuthRequest(t, http.MethodPost, cpURLWithDraftPersist(ts.URL, draftID.String()), testUserID, persistBody)
+	resp = doAuthRequest(t, http.MethodPost, cpURL(ts.URL, cproutes.Policies), testUserID, createPolicyBody(testScanID, testWallet, testSHA))
 	_ = resp.Body.Close()
 
 	resp = doAuthRequest(t, http.MethodGet, countURL, testUserID, nil)
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("count after persist: status = %d", resp.StatusCode)
+		t.Fatalf("count after create: status = %d", resp.StatusCode)
 	}
 	var after map[string]any
 	decodeJSONBody(t, resp, &after)
 	if after["referenced"] != true || after["count"].(float64) != 1 {
-		t.Fatalf("after persist: %#v", after)
+		t.Fatalf("after create: %#v", after)
 	}
 }
 
@@ -261,27 +217,31 @@ func TestCpAPI_CountPoliciesByWallet(t *testing.T) {
 	ts := newTestCPAPIServer(t, db)
 	defer ts.Close()
 
-	draftID := uuid.New()
-	upsertBody, _ := json.Marshal(map[string]any{
-		"payload": map[string]any{
-			"policy_context": map[string]any{"wallet_address": testWallet, "wallet_type": "eoa"},
-		},
-	})
-	resp := doAuthRequest(t, http.MethodPut, cpURLWithDraft(ts.URL, draftID.String()), testUserID, upsertBody)
+	countURL := cpURL(ts.URL, cproutes.ReferenceWallet) + "?wallet_address=" + testWallet
+	resp := doAuthRequest(t, http.MethodGet, countURL, testUserID, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("count wallet empty: status = %d", resp.StatusCode)
+	}
+	var empty map[string]any
+	decodeJSONBody(t, resp, &empty)
+	if empty["exists"] != false || empty["policy_count"].(float64) != 0 {
+		t.Fatalf("empty wallet refs: %#v", empty)
+	}
+	if _, ok := empty["draft_count"]; ok {
+		t.Fatal("draft_count must not be returned after RD-P3")
+	}
+
+	resp = doAuthRequest(t, http.MethodPost, cpURL(ts.URL, cproutes.Policies), testUserID, createPolicyBody(testScanID, testWallet, testSHA))
 	_ = resp.Body.Close()
 
-	countURL := cpURL(ts.URL, cproutes.ReferenceWallet) + "?wallet_address=" + testWallet
 	resp = doAuthRequest(t, http.MethodGet, countURL, testUserID, nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("count wallet: status = %d", resp.StatusCode)
 	}
 	var body map[string]any
 	decodeJSONBody(t, resp, &body)
-	if body["exists"] != true || body["draft_count"].(float64) != 1 {
+	if body["exists"] != true || body["policy_count"].(float64) != 1 {
 		t.Fatalf("wallet refs: %#v", body)
-	}
-	if body["platform_draft_id"] != draftID.String() {
-		t.Fatalf("platform_draft_id = %v, want %s", body["platform_draft_id"], draftID.String())
 	}
 }
 
@@ -290,23 +250,7 @@ func TestCpAPI_ListPoliciesByScan(t *testing.T) {
 	ts := newTestCPAPIServer(t, db)
 	defer ts.Close()
 
-	draftID := uuid.New()
-	upsertBody, _ := json.Marshal(map[string]any{
-		"scan_id": testScanID.String(),
-		"payload": map[string]any{
-			"policy_context": map[string]any{"wallet_address": testWallet, "wallet_type": "eoa"},
-		},
-	})
-	resp := doAuthRequest(t, http.MethodPut, cpURLWithDraft(ts.URL, draftID.String()), testUserID, upsertBody)
-	_ = resp.Body.Close()
-
-	persistBody, _ := json.Marshal(map[string]any{
-		"wallet_address":             testWallet,
-		"chain_id":                   1,
-		"scan_id":                    testScanID.String(),
-		"wallet_control_verified_at": time.Now().UTC().Format(time.RFC3339Nano),
-	})
-	resp = doAuthRequest(t, http.MethodPost, cpURLWithDraftPersist(ts.URL, draftID.String()), testUserID, persistBody)
+	resp := doAuthRequest(t, http.MethodPost, cpURL(ts.URL, cproutes.Policies), testUserID, createPolicyBody(testScanID, testWallet, testSHA))
 	_ = resp.Body.Close()
 
 	listURL := cpURL(ts.URL, cproutes.Policies) + "?scan_id=" + testScanID.String()
@@ -322,51 +266,26 @@ func TestCpAPI_ListPoliciesByScan(t *testing.T) {
 	}
 }
 
-func TestCpAPI_DeleteDraftAndPolicy(t *testing.T) {
+func TestCpAPI_DeletePolicy(t *testing.T) {
 	db := setupCPAPITestDB(t)
 	ts := newTestCPAPIServer(t, db)
 	defer ts.Close()
 
-	draftID := uuid.New()
-	upsertBody, _ := json.Marshal(map[string]any{
-		"scan_id": testScanID.String(),
-		"payload": map[string]any{
-			"policy_context": map[string]any{"wallet_address": testWallet, "wallet_type": "eoa"},
-		},
-	})
-	resp := doAuthRequest(t, http.MethodPut, cpURLWithDraft(ts.URL, draftID.String()), testUserID, upsertBody)
-	_ = resp.Body.Close()
-
-	resp = doAuthRequest(t, http.MethodDelete, cpURLWithDraft(ts.URL, draftID.String()), testUserID, nil)
-	if resp.StatusCode != http.StatusNoContent {
-		t.Fatalf("delete draft: status = %d", resp.StatusCode)
-	}
-	_ = resp.Body.Close()
-
-	resp = doAuthRequest(t, http.MethodGet, cpURLWithDraft(ts.URL, draftID.String()), testUserID, nil)
-	if resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("get deleted draft: status = %d", resp.StatusCode)
-	}
-	_ = resp.Body.Close()
-
-	// Persist a policy then delete it.
-	draftID = uuid.New()
-	resp = doAuthRequest(t, http.MethodPut, cpURLWithDraft(ts.URL, draftID.String()), testUserID, upsertBody)
-	_ = resp.Body.Close()
-	persistBody, _ := json.Marshal(map[string]any{
-		"wallet_address":             testWallet,
-		"chain_id":                   1,
-		"scan_id":                    testScanID.String(),
-		"wallet_control_verified_at": time.Now().UTC().Format(time.RFC3339Nano),
-	})
-	resp = doAuthRequest(t, http.MethodPost, cpURLWithDraftPersist(ts.URL, draftID.String()), testUserID, persistBody)
-	var persistResp map[string]any
-	decodeJSONBody(t, resp, &persistResp)
-	policyID := persistResp["policy_id"].(string)
+	resp := doAuthRequest(t, http.MethodPost, cpURL(ts.URL, cproutes.Policies), testUserID, createPolicyBody(testScanID, testWallet, testSHA))
+	var createResp map[string]any
+	decodeJSONBody(t, resp, &createResp)
+	policyID := createResp["policy_id"].(string)
 
 	resp = doAuthRequest(t, http.MethodDelete, cpURLWithPolicy(ts.URL, policyID), testUserID, nil)
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("delete policy: status = %d", resp.StatusCode)
+	}
+	_ = resp.Body.Close()
+
+	// Soft-delete frees W1 unique slot.
+	resp = doAuthRequest(t, http.MethodPost, cpURL(ts.URL, cproutes.Policies), testUserID, createPolicyBody(uuid.New(), testWallet, "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"))
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("recreate after delete: status = %d", resp.StatusCode)
 	}
 	_ = resp.Body.Close()
 }
@@ -413,8 +332,6 @@ func TestCpAPI_RequiresUserHeader(t *testing.T) {
 
 func TestCpAPI_NoPublicAPIPrefix(t *testing.T) {
 	for _, route := range []string{
-		cproutes.DraftByID,
-		cproutes.DraftPersist,
 		cproutes.PolicyByID,
 		cproutes.Policies,
 		cproutes.ReferenceWallet,
@@ -431,4 +348,5 @@ func TestCpDDL_MigrateCompatibleWithHandlerDB(t *testing.T) {
 	if err := cpddl.MigrateCPSchema(db); err != nil {
 		t.Fatalf("MigrateCPSchema on sqlite test db: %v", err)
 	}
+	_ = domain.CryptoPolicyStatusPersisted
 }

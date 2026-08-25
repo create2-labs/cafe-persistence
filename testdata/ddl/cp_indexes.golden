@@ -1,12 +1,7 @@
-# pg_indexes on crypto_policy_drafts, crypto_policies, draft_persist_state (ADR §8.4)
+# pg_indexes on crypto_policies (ADR §8.4 / ADR_20260824 RD-P3 — policy-only)
 crypto_policies_pkey
-crypto_policy_drafts_pkey
-draft_persist_state_pkey
 idx_crypto_policies_deleted_at
 idx_crypto_policies_status
 idx_crypto_policies_user_id
 idx_crypto_policies_user_scan_persisted
-idx_crypto_policies_user_wallet_persisted
-idx_crypto_policy_drafts_deleted_at
-idx_crypto_policy_drafts_user_id
-idx_crypto_policy_drafts_user_scan_active
+uidx_crypto_policies_user_wallet_active

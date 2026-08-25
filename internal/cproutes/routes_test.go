@@ -17,8 +17,8 @@ func TestV1BaseIsInternalOnly(t *testing.T) {
 }
 
 func TestJoinPrefixesV1Base(t *testing.T) {
-	got := cproutes.Join(cproutes.DraftByID)
-	want := cproutes.V1Base + cproutes.DraftByID
+	got := cproutes.Join(cproutes.PolicyByID)
+	want := cproutes.V1Base + cproutes.PolicyByID
 	if got != want {
 		t.Fatalf("Join: got %q want %q", got, want)
 	}
@@ -26,8 +26,6 @@ func TestJoinPrefixesV1Base(t *testing.T) {
 
 func TestRouteLiteralsAreRelative(t *testing.T) {
 	for _, route := range []string{
-		cproutes.DraftByID,
-		cproutes.DraftPersist,
 		cproutes.PolicyByID,
 		cproutes.Policies,
 		cproutes.ReferenceWallet,
@@ -38,6 +36,19 @@ func TestRouteLiteralsAreRelative(t *testing.T) {
 		}
 		if !strings.HasPrefix(route, "/") {
 			t.Fatalf("route %q must start with /", route)
+		}
+	}
+}
+
+func TestNoDraftRoutes(t *testing.T) {
+	for _, route := range []string{
+		cproutes.PolicyByID,
+		cproutes.Policies,
+		cproutes.ReferenceWallet,
+		cproutes.ReferenceScan,
+	} {
+		if strings.Contains(route, "draft") {
+			t.Fatalf("draft route must not remain after RD-P3: %q", route)
 		}
 	}
 }

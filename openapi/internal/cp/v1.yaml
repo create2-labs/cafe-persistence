@@ -1,43 +1,41 @@
 openapi: 3.0.3
 info:
   title: CAFE Persistence — internal crypto policy (CP) API
-  version: "1.0.0"
+  version: "1.1.0"
   license:
     name: Proprietary
     url: https://example.com/license
   description: |
-    **PERS-D3b-spec** — service-to-service contract for durable crypto policy storage in
+    **PERS-D3b-spec / RD-P3** — service-to-service contract for durable crypto policy storage in
     `cafe-persistence`. **Semantic ownership** of CP data (columns, statuses, payload shape,
-    persist-once invariants) is **CPM §8.2**; cafe-persistence owns DDL, migrations, and writers (D4).
+    W1 uniqueness) is **CPM** + [ADR_20260824_remove_cp_drafts](https://github.com/create2-labs/cafe-adr/blob/main/ADR_20260824_remove_cp_drafts.md);
+    cafe-persistence owns DDL, migrations, and writers.
 
     **Consumers:**
-    - `cafe-crypto-policy-mgt` — draft/policy CRUD and `PersistDraft` once `CPM_STORE=persistence` (D5a+)
-    - `cafe-discovery` — existence-only references for W1 / W3 immutability guards (D6b)
+    - `cafe-crypto-policy-mgt` — `POST /policies` after public signed persist (RD-P5+), plus GET/DELETE/list
+    - `cafe-discovery` — existence-only references for W1 / W3 immutability guards
 
-    **Non-goals (this milestone):** HTTP handlers, Postgres migrations, Redis CP cache,
-    changes to public `/api/cpm/v1` (`cpm-v1.yaml`) or `/api/discovery/v1`. Not exposed on
-    public NGINX edge.
+    **Breaking (RD-P3):** draft tables and `/drafts*` internal routes are **removed** (no dual-run).
+    Old CPM draft clients against this schema **fail** intentionally; RAZ of test policies is authorized.
 
     **URL prefix (in-cluster):** `/internal/cp/v1` on the persistence internal HTTP listener
     (`PERSISTENCE_INTERNAL_HTTP_PORT`, default `8082`, shared with `internal/scan/v1`).
-    **Not** exposed on the public product edge.
+    **Not** exposed on the public product edge / NGINX.
 
     **Auth:** static platform bearer token (`CAFE_PERSISTENCE_SERVICE_TOKEN`). Callers derive
     `user_id` / `tenant_id` from the end-user JWT and propagate them via headers — **never** from
     an untrusted client body. See ADR persistence §9.2.
 
     **Wallet authorization boundary:** EIP-191 / `personal_sign` verification stays in CPM on the
-    public `POST /api/cpm/v1/drafts/{draft_id}/persist` route. The internal `PersistDraft`
-    operation accepts **pre-verified** wallet metadata only; raw `signature` bytes are **not**
-    stored in Postgres (ADR §8.4, `CP_PERSIST.md`).
+    public `POST /api/cpm/v1/policies` route. The internal `CreatePolicy` operation accepts
+    **pre-verified** wallet metadata + server `payload_sha256` only; raw `signature` /
+    `signed_message` bytes are **not** stored in Postgres.
 
-    **Idempotence:** `draft_id` (+ owner scope) is the persist idempotence key. Successful replay
-    returns **409** `DRAFT_ALREADY_PERSISTED` with the same `policy_id` semantics as
-    `OwnerScopedStore.PersistDraftOnce` (ADR §5.5). Mid-flight retry before completion reuses the
-    allocated `policy_id` via `draft_persist_state`.
+    **W1 idempotence:** unique partial index on active policies
+    `(user_id, wallet_address) WHERE status = 'persisted' AND deleted_at IS NULL`.
+    Duplicate create → **409** `POLICY_ALREADY_EXISTS`. Replace = DELETE then new create (NB1).
 
-    **Postgres tables (D4 target):** `crypto_policy_drafts`, `crypto_policies`, `draft_persist_state`
-    — see ADR §8.4.
+    **Postgres table:** `crypto_policies` only (draft tables dropped).
 
 servers:
   - url: http://cafe-persistence:{internal_port}/internal/cp/v1
@@ -48,12 +46,8 @@ servers:
         description: "PERSISTENCE_INTERNAL_HTTP_PORT (distinct from health port 8081)."
 
 tags:
-  - name: drafts
-    description: Owner-scoped platform drafts (`crypto_policy_drafts`, status `server_draft`).
-  - name: persist
-    description: Transactional draft → policy transition (`draft_persist_state` idempotence).
   - name: policies
-    description: Owner-scoped persisted policies (`crypto_policies`, status `persisted` / `superseded`).
+    description: Owner-scoped persisted policies (`crypto_policies`, status `persisted`).
   - name: references
     description: Existence / count facts for Discovery W1 and W3 — no policy payload (ADR §9.3).
 
@@ -61,111 +55,16 @@ security:
   - serviceBearer: []
 
 paths:
-  /drafts/{draft_id}:
-    parameters:
-      - $ref: "#/components/parameters/DraftId"
-    put:
-      tags: [drafts]
-      summary: Upsert owner draft
-      description: |
-        Mirrors `OwnerScopedStore.SaveDraft`. Client-supplied `draft_id` is the upsert key.
-        Creates or updates `crypto_policy_drafts` for the scoped owner. Status is always
-        `server_draft` until persist succeeds.
-      operationId: upsertDraft
-      parameters:
-        - $ref: "#/components/parameters/UserIdHeader"
-        - $ref: "#/components/parameters/TenantIdHeader"
-        - $ref: "#/components/parameters/RequestIdHeader"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/DraftUpsertBody"
-      responses:
-        "200":
-          description: Draft created or updated.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/DraftRow"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/ServiceUnauthorized"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-        "503":
-          $ref: "#/components/responses/ServiceUnavailable"
-    get:
-      tags: [drafts]
-      summary: Get owner draft by draft_id
-      operationId: getDraft
-      parameters:
-        - $ref: "#/components/parameters/UserIdHeader"
-        - $ref: "#/components/parameters/TenantIdHeader"
-        - $ref: "#/components/parameters/RequestIdHeader"
-      responses:
-        "200":
-          description: Draft row for owner.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/DraftRow"
-        "404":
-          $ref: "#/components/responses/DraftNotFound"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/ServiceUnauthorized"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-        "503":
-          $ref: "#/components/responses/ServiceUnavailable"
-    delete:
-      tags: [drafts]
-      summary: Delete owner draft
-      description: |
-        Soft-deletes the draft row (`deleted_at`). Mirrors `OwnerScopedStore.DeleteDraft`.
-        Does not remove an already persisted policy.
-      operationId: deleteDraft
-      parameters:
-        - $ref: "#/components/parameters/UserIdHeader"
-        - $ref: "#/components/parameters/TenantIdHeader"
-        - $ref: "#/components/parameters/RequestIdHeader"
-      responses:
-        "204":
-          description: Draft removed (idempotent when already absent for owner).
-        "404":
-          $ref: "#/components/responses/DraftNotFound"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/ServiceUnauthorized"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-        "503":
-          $ref: "#/components/responses/ServiceUnavailable"
-
-  /drafts/{draft_id}/persist:
-    parameters:
-      - $ref: "#/components/parameters/DraftId"
+  /policies:
     post:
-      tags: [persist]
-      summary: Persist draft to official CP (idempotent)
+      tags: [policies]
+      summary: Create persisted crypto policy
       description: |
-        Transactional **persist-once** (idempotent on `draft_id`) transition from draft to
-        `crypto_policies`. CPM calls this **after** wallet authorization succeeds on the public API.
-
-        **Semantics (CPM §8.2 / `PersistDraftOnce`):**
-        - First success allocates `policy_id`, writes policy row, marks `draft_persist_state.completed`
-        - Replay after success → **409** `DRAFT_ALREADY_PERSISTED` (same `policy_id` on verification GET)
-        - Failure before completion allows retry with the **same** `draft_id` and reuses `policy_id`
-        - Prior persisted policies for the same owner+`scan_id` are marked `superseded` (at most one
-          active `persisted` row per scan)
-
-        **Does not** accept `signed_message` / `signature` — wallet proof is verified by CPM only.
-      operationId: persistDraft
+        Creates one `crypto_policies` row after CPM verified wallet control and computed
+        `payload_sha256`. Idempotence / conflict is **W1** unique (409), not draft-based.
+        Client-supplied `payload_sha256` inside `payload` JSON is stripped; the column from
+        the request body is the stored authority (CPM is the only trusted caller).
+      operationId: createPolicy
       parameters:
         - $ref: "#/components/parameters/UserIdHeader"
         - $ref: "#/components/parameters/TenantIdHeader"
@@ -175,31 +74,61 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/PersistDraftRequest"
+              $ref: "#/components/schemas/CreatePolicyRequest"
       responses:
-        "200":
-          description: Draft persisted to official CP.
+        "201":
+          description: Policy created.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/PersistDraftResponse"
+                $ref: "#/components/schemas/CreatePolicyResponse"
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/ServiceUnauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
-        "404":
-          $ref: "#/components/responses/DraftNotFound"
         "409":
-          description: Draft already persisted (idempotent replay).
+          description: Active policy already exists for owner + wallet (W1).
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/CpErrorResponse"
               example:
-                error: DRAFT_ALREADY_PERSISTED
-                message: Draft has already been persisted for this owner.
+                error: POLICY_ALREADY_EXISTS
+                message: An active crypto policy already exists for this wallet.
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+    get:
+      tags: [policies]
+      summary: List persisted policies for a scan
+      description: |
+        Owner-scoped list of **persisted** policies referencing `scan_id`.
+        Newest `persisted_at` first.
+      operationId: listPoliciesByScan
+      parameters:
+        - $ref: "#/components/parameters/UserIdHeader"
+        - $ref: "#/components/parameters/TenantIdHeader"
+        - $ref: "#/components/parameters/RequestIdHeader"
+        - name: scan_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: Paginated policy rows for scan_id.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedPolicyRows"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/ServiceUnauthorized"
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
 
@@ -235,8 +164,7 @@ paths:
       tags: [policies]
       summary: Soft-delete owner persisted policy
       description: |
-        Sets `deleted_at` on the policy row. Does not hard-delete history. Mirrors
-        `OwnerScopedStore.DeletePolicy`.
+        Sets `deleted_at` on the policy row. Frees the W1 unique slot so a new create can succeed (NB1).
       operationId: deletePolicy
       parameters:
         - $ref: "#/components/parameters/UserIdHeader"
@@ -256,52 +184,14 @@ paths:
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
 
-  /policies:
-    get:
-      tags: [policies]
-      summary: List persisted policies for a scan
-      description: |
-        Owner-scoped list of **persisted** policies referencing `scan_id` (excludes drafts).
-        Mirrors `OwnerScopedStore.ListPersistedPoliciesForScan`. Newest `persisted_at` first.
-        After replacement persist, at most one `status=persisted` row per scan is expected.
-      operationId: listPoliciesByScan
-      parameters:
-        - $ref: "#/components/parameters/UserIdHeader"
-        - $ref: "#/components/parameters/TenantIdHeader"
-        - $ref: "#/components/parameters/RequestIdHeader"
-        - name: scan_id
-          in: query
-          required: true
-          schema:
-            type: string
-            format: uuid
-        - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/Offset"
-      responses:
-        "200":
-          description: Paginated policy rows for scan_id.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/PaginatedPolicyRows"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/ServiceUnauthorized"
-        "503":
-          $ref: "#/components/responses/ServiceUnavailable"
-
   /references/wallet:
     get:
       tags: [references]
       summary: Count active CP context for a wallet target (W1)
       description: |
-        Existence facts for Discovery **W1** guard on `POST /scan` (IMM-9b). Returns counts of
-        persisted policies and active platform drafts whose payload references the normalized
-        wallet address — **no policy payload** (ADR §9.3).
-
-        Replaces transitional `POST /internal/policies/references/wallet-target` on CPM when
-        `CPM_STORE=persistence` and D6b land.
+        Existence facts for Discovery **W1** guard on `POST /scan`. Returns count of
+        persisted policies for the normalized wallet address — **no policy payload**,
+        **no draft_count** (drafts removed).
       operationId: countPoliciesByWallet
       parameters:
         - $ref: "#/components/parameters/UserIdHeader"
@@ -332,10 +222,8 @@ paths:
       tags: [references]
       summary: Count persisted policies referencing a scan (W3)
       description: |
-        Existence facts for Discovery **W3** guard on scan DELETE (ADR §9.3). Counts only
-        **persisted** policies (`status=persisted`, not soft-deleted) — drafts excluded.
-
-        Replaces transitional `POST /internal/policies/references/scan` on CPM when D6b lands.
+        Existence facts for Discovery **W3** guard on scan DELETE. Counts only
+        **persisted** policies (`status=persisted`, not soft-deleted).
       operationId: countPoliciesByScan
       parameters:
         - $ref: "#/components/parameters/UserIdHeader"
@@ -393,14 +281,6 @@ components:
       schema:
         type: string
       description: Correlation id echoed on error responses when provided.
-    DraftId:
-      name: draft_id
-      in: path
-      required: true
-      schema:
-        type: string
-        format: uuid
-      description: Client-supplied draft key (crypto_policy_drafts.id).
     PolicyId:
       name: policy_id
       in: path
@@ -440,15 +320,6 @@ components:
           example:
             error: FORBIDDEN
             message: Resource is not accessible for the scoped owner.
-    DraftNotFound:
-      description: Draft not found for scoped owner.
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/CpErrorResponse"
-          example:
-            error: DRAFT_NOT_FOUND
-            message: Draft not found.
     PolicyNotFound:
       description: Policy not found for scoped owner.
       content:
@@ -475,17 +346,11 @@ components:
             message: Persistence is temporarily unavailable.
 
   schemas:
-    DraftStatus:
-      type: string
-      enum: [server_draft]
-      description: Platform work-in-progress; not a persisted policy instance.
-
     PolicyStatus:
       type: string
-      enum: [persisted, superseded]
+      enum: [persisted]
       description: |
-        `persisted` — active durable CP row. `superseded` — replaced by a newer persist for the
-        same scan; payload is immutable after first `persisted` transition.
+        `persisted` — active durable CP row. Replacement uses soft-delete then a new create (NB1).
 
     CpErrorResponse:
       type: object
@@ -494,9 +359,8 @@ components:
         error:
           type: string
           enum:
-            - DRAFT_NOT_FOUND
-            - DRAFT_ALREADY_PERSISTED
             - POLICY_NOT_FOUND
+            - POLICY_ALREADY_EXISTS
             - FORBIDDEN
             - PERSISTENCE_UNAVAILABLE
             - INVALID_WALLET_ADDRESS
@@ -514,57 +378,23 @@ components:
         message:
           type: string
 
-    DraftUpsertBody:
+    CreatePolicyRequest:
       type: object
-      required: [payload]
-      additionalProperties: false
-      properties:
-        scan_id:
-          type: string
-          format: uuid
-          description: Optional Discovery scan binding (recommended for wallet flows).
-        payload:
-          type: object
-          additionalProperties: true
-          description: Draft JSON (selection, parameters, context). May be empty object.
-
-    DraftRow:
-      type: object
-      required: [id, user_id, payload, status, created_at, updated_at]
-      description: Persistence projection of crypto_policy_drafts table.
-      properties:
-        id:
-          type: string
-          format: uuid
-          description: Same as draft_id upsert key.
-        user_id:
-          type: string
-          format: uuid
-        tenant_id:
-          type: string
-        scan_id:
-          type: string
-          format: uuid
-        payload:
-          type: object
-          additionalProperties: true
-        status:
-          $ref: "#/components/schemas/DraftStatus"
-        created_at:
-          type: string
-          format: date-time
-        updated_at:
-          type: string
-          format: date-time
-
-    PersistDraftRequest:
-      type: object
-      required: [wallet_address, chain_id, scan_id, wallet_control_verified_at]
+      required:
+        - scan_id
+        - wallet_address
+        - chain_id
+        - payload
+        - payload_sha256
+        - wallet_control_verified_at
       additionalProperties: false
       description: |
-        Pre-verified wallet metadata from CPM after public wallet-auth succeeds. Maps to
-        `persistence.PersistDraftInput` in the current in-memory store.
+        Pre-verified create from CPM after public wallet-auth + payload hash. Maps to
+        `cpstore.CreatePolicyInput`. Must not include raw `signature` / `signed_message`.
       properties:
+        scan_id:
+          type: string
+          format: uuid
         wallet_address:
           type: string
           description: Normalized EOA address (0x plus lowercase hex).
@@ -572,35 +402,47 @@ components:
           type: integer
           format: int64
           minimum: 1
-        scan_id:
+        payload:
+          type: object
+          additionalProperties: true
+          description: Policy JSON (signature fields stripped on write).
+        payload_sha256:
           type: string
-          format: uuid
-          description: Must match the bound draft scan_id.
+          description: Hex SHA-256 of JCS-canonical hashed subtree (CPM server authority).
+          minLength: 64
+          maxLength: 64
+        signed_message_hash:
+          type: string
+          description: Hash of the verified canonical message (no raw message stored).
+        wallet_control_method:
+          type: string
+          enum: [eoa_signature]
+          default: eoa_signature
         wallet_control_verified_at:
           type: string
           format: date-time
-          description: UTC timestamp when CPM verified wallet control (RFC3339).
+        challenge_issued_at:
+          type: string
+          format: date-time
+          description: Derived from verified signed message window (stateless challenges).
+        challenge_expires_at:
+          type: string
+          format: date-time
 
-    PersistDraftResponse:
+    CreatePolicyResponse:
       type: object
       required:
         - policy_id
-        - draft_id
         - scan_id
         - wallet_address
         - chain_id
+        - payload_sha256
         - status
         - ownership_status
         - wallet_control_method
         - persisted_at
-      description: |
-        Durable persist acknowledgement. Aligns with public `DraftPersistResponse` in `cpm-v1.yaml`
-        (no signature fields).
       properties:
         policy_id:
-          type: string
-          format: uuid
-        draft_id:
           type: string
           format: uuid
         scan_id:
@@ -611,6 +453,8 @@ components:
         chain_id:
           type: integer
           format: int64
+        payload_sha256:
+          type: string
         status:
           type: string
           enum: [persisted]
@@ -630,20 +474,19 @@ components:
         - id
         - user_id
         - scan_id
-        - draft_id
         - wallet_address
         - chain_id
         - payload
+        - payload_sha256
         - status
         - persisted_at
         - created_at
         - updated_at
-      description: Persistence projection of crypto_policies table (active or superseded row).
+      description: Persistence projection of crypto_policies (active row).
       properties:
         id:
           type: string
           format: uuid
-          description: policy_id identifier.
         user_id:
           type: string
           format: uuid
@@ -652,12 +495,9 @@ components:
         scan_id:
           type: string
           format: uuid
-        draft_id:
-          type: string
-          format: uuid
         wallet_address:
           type: string
-          description: Normalized checksum address; indexed for W1.
+          description: Normalized address; W1 unique with user_id when active.
         chain_id:
           type: integer
           format: int64
@@ -665,8 +505,13 @@ components:
           type: object
           additionalProperties: true
           description: |
-            Normalized policy JSON (includes audit fields). Immutable after first `persisted`
-            transition; `signed_message` and `signature` are never stored.
+            Normalized policy JSON. Immutable after create; `signed_message` and `signature`
+            are never stored. Client `payload_sha256` inside JSON is stripped.
+        payload_sha256:
+          type: string
+          description: Server-stored payload fingerprint for GET reconciliation after 409.
+        signed_message_hash:
+          type: string
         ownership_status:
           type: string
           example: verified
@@ -674,6 +519,12 @@ components:
           type: string
           example: eoa_signature
         wallet_control_verified_at:
+          type: string
+          format: date-time
+        challenge_issued_at:
+          type: string
+          format: date-time
+        challenge_expires_at:
           type: string
           format: date-time
         status:
@@ -715,11 +566,9 @@ components:
 
     WalletReferenceCount:
       type: object
-      required: [exists, policy_count, draft_count]
+      required: [exists, policy_count]
       description: |
-        W1 existence facts. `exists` is true when `policy_count + draft_count > 0`.
-        Wallet resolution uses the same payload extraction rules as `CountActiveWalletCPMContext`
-        (IMM-9b).
+        W1 existence facts. `exists` is true when `policy_count > 0`. No draft fields.
       properties:
         exists:
           type: boolean
@@ -727,17 +576,13 @@ components:
           type: integer
           minimum: 0
           description: Persisted policies referencing the wallet target.
-        draft_count:
-          type: integer
-          minimum: 0
-          description: Active platform drafts referencing the wallet target.
 
     ScanReferenceCount:
       type: object
       required: [referenced, count]
       description: |
         W3 existence facts. `referenced` is true when `count > 0` for persisted policies bound
-        to `scan_id` (drafts excluded).
+        to `scan_id`.
       properties:
         referenced:
           type: boolean

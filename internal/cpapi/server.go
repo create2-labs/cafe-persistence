@@ -1,4 +1,4 @@
-// Package cpapi implements the internal CP HTTP API (PERS-D4b).
+// Package cpapi implements the internal CP HTTP API (PERS-D4b / RD-P3 policy-only).
 package cpapi
 
 import (
@@ -16,10 +16,7 @@ func RegisterRoutes(mux *http.ServeMux, h *Handler) {
 		mux.HandleFunc(pattern, fn)
 	}
 
-	register("PUT", cproutes.DraftByID, h.UpsertDraft)
-	register("GET", cproutes.DraftByID, h.GetDraft)
-	register("DELETE", cproutes.DraftByID, h.DeleteDraft)
-	register("POST", cproutes.DraftPersist, h.PersistDraft)
+	register("POST", cproutes.Policies, h.CreatePolicy)
 	register("GET", cproutes.PolicyByID, h.GetPolicy)
 	register("DELETE", cproutes.PolicyByID, h.DeletePolicy)
 	register("GET", cproutes.Policies, h.ListPoliciesByScan)

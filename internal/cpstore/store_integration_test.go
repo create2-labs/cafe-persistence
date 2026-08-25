@@ -16,179 +16,103 @@ import (
 	"gorm.io/gorm"
 )
 
-func TestPostgresStore_persistDraftLifecycle(t *testing.T) {
+func TestPostgresStore_createPolicyLifecycle(t *testing.T) {
 	db := openTestDB(t)
 	store := NewPostgresStore(db)
 
 	scope := OwnerScope{UserID: "user-a", TenantID: "t1"}
 	scanID := uuid.MustParse("550e8400-e29b-41d4-a716-446655440000")
-	draftID := uuid.New()
 	wallet := "0x742d35cc6634c0532925a3b844bc454e4438f44e"
-
-	_, err := store.SaveDraft(scope, draftID, &scanID, map[string]any{
-		"policy_context": map[string]any{
-			"wallet_address": wallet,
-			"wallet_type":    "eoa",
-		},
-		"mode": "strict",
-	})
-	if err != nil {
-		t.Fatalf("SaveDraft: %v", err)
-	}
-
 	verifiedAt := time.Date(2026, 6, 10, 12, 1, 0, 0, time.UTC)
-	result, err := store.PersistDraftOnce(scope, draftID, PersistDraftInput{
-		WalletAddress: wallet,
-		ChainID:       1,
-		ScanID:        scanID,
-		VerifiedAt:    verifiedAt,
+	issued := verifiedAt.Add(-2 * time.Minute)
+	expires := verifiedAt.Add(8 * time.Minute)
+	sha := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+	result, err := store.CreatePolicy(scope, CreatePolicyInput{
+		ScanID:                  scanID,
+		WalletAddress:           wallet,
+		ChainID:                 1,
+		Payload:                 map[string]any{"mode": "strict", "signature": "raw-should-strip"},
+		PayloadSHA256:           sha,
+		SignedMessageHash:       "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		WalletControlMethod:     "eoa_signature",
+		WalletControlVerifiedAt: verifiedAt,
+		ChallengeIssuedAt:       &issued,
+		ChallengeExpiresAt:      &expires,
 	})
 	if err != nil {
-		t.Fatalf("PersistDraftOnce: %v", err)
+		t.Fatalf("CreatePolicy: %v", err)
 	}
-	if result.PolicyID == uuid.Nil || result.DraftID != draftID || result.ScanID != scanID {
+	if result.PolicyID == uuid.Nil || result.ScanID != scanID || result.PayloadSHA256 != sha {
 		t.Fatalf("unexpected result: %#v", result)
 	}
 
-	if _, err := store.GetDraft(scope, draftID); !errors.Is(err, ErrDraftNotFound) {
-		t.Fatalf("expected draft removed after persist, got %v", err)
-	}
 	policy, err := store.GetPolicy(scope, result.PolicyID)
 	if err != nil {
 		t.Fatalf("GetPolicy: %v", err)
 	}
-	if policy.Payload["ownership_status"] != "verified" {
-		t.Fatalf("ownership_status = %#v", policy.Payload["ownership_status"])
+	if policy.PayloadSHA256 != sha {
+		t.Fatalf("payload_sha256 = %q", policy.PayloadSHA256)
+	}
+	if policy.SignedMessageHash == "" || policy.ChallengeIssuedAt == nil || policy.ChallengeExpiresAt == nil {
+		t.Fatalf("audit fields missing: %#v", policy)
 	}
 	if _, ok := policy.Payload["signature"]; ok {
 		t.Fatal("raw signature must not be stored")
 	}
 }
 
-func TestPostgresStore_persistReplayReturnsAlreadyPersisted(t *testing.T) {
+func TestPostgresStore_createPolicyW1UniqueViolation(t *testing.T) {
 	db := openTestDB(t)
 	store := NewPostgresStore(db)
 
 	scope := OwnerScope{UserID: "user-a", TenantID: "t1"}
 	scanID := uuid.MustParse("550e8400-e29b-41d4-a716-446655440000")
-	draftID := uuid.New()
 	wallet := "0x742d35cc6634c0532925a3b844bc454e4438f44e"
-
-	_, err := store.SaveDraft(scope, draftID, &scanID, map[string]any{
-		"policy_context": map[string]any{"wallet_address": wallet, "wallet_type": "eoa"},
-	})
-	if err != nil {
-		t.Fatalf("SaveDraft: %v", err)
+	in := CreatePolicyInput{
+		ScanID:                  scanID,
+		WalletAddress:           wallet,
+		ChainID:                 1,
+		Payload:                 map[string]any{"mode": "strict"},
+		PayloadSHA256:           "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+		WalletControlVerifiedAt: time.Now().UTC(),
 	}
-	in := PersistDraftInput{WalletAddress: wallet, ChainID: 1, ScanID: scanID, VerifiedAt: time.Now().UTC()}
-	if _, err := store.PersistDraftOnce(scope, draftID, in); err != nil {
-		t.Fatalf("first persist: %v", err)
+	if _, err := store.CreatePolicy(scope, in); err != nil {
+		t.Fatalf("first create: %v", err)
 	}
-	if _, err := store.PersistDraftOnce(scope, draftID, in); !errors.Is(err, ErrDraftAlreadyPersisted) {
-		t.Fatalf("replay: want ErrDraftAlreadyPersisted, got %v", err)
+	in.PayloadSHA256 = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+	in.ScanID = uuid.New()
+	if _, err := store.CreatePolicy(scope, in); !errors.Is(err, ErrPolicyAlreadyExists) {
+		t.Fatalf("second create: want ErrPolicyAlreadyExists, got %v", err)
 	}
 }
 
-func TestPostgresStore_persistRetryReusesPolicyID(t *testing.T) {
+func TestPostgresStore_deleteThenRecreateAllowsW1(t *testing.T) {
 	db := openTestDB(t)
 	store := NewPostgresStore(db)
 
-	scope := OwnerScope{UserID: "user-a", TenantID: "t1"}
-	scanID := uuid.MustParse("550e8400-e29b-41d4-a716-446655440000")
-	draftID := uuid.New()
+	scope := OwnerScope{UserID: "user-del", TenantID: "t-del"}
+	scanID := uuid.New()
 	wallet := "0x742d35cc6634c0532925a3b844bc454e4438f44e"
-	reservedPolicyID := uuid.New()
-
-	_, err := store.SaveDraft(scope, draftID, &scanID, map[string]any{
-		"policy_context": map[string]any{"wallet_address": wallet, "wallet_type": "eoa"},
-	})
+	in := CreatePolicyInput{
+		ScanID:                  scanID,
+		WalletAddress:           wallet,
+		ChainID:                 1,
+		Payload:                 map[string]any{"mode": "strict"},
+		PayloadSHA256:           "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+		WalletControlVerifiedAt: time.Now().UTC(),
+	}
+	first, err := store.CreatePolicy(scope, in)
 	if err != nil {
-		t.Fatalf("SaveDraft: %v", err)
+		t.Fatalf("CreatePolicy: %v", err)
 	}
-	if err := db.Create(&domain.DraftPersistStateEntity{
-		DraftID:   draftID,
-		PolicyID:  reservedPolicyID,
-		Completed: false,
-		UserID:    scope.UserID,
-		TenantID:  scope.TenantID,
-	}).Error; err != nil {
-		t.Fatalf("seed draft_persist_state: %v", err)
+	if err := store.DeletePolicy(scope, first.PolicyID); err != nil {
+		t.Fatalf("DeletePolicy: %v", err)
 	}
-
-	in := PersistDraftInput{WalletAddress: wallet, ChainID: 1, ScanID: scanID, VerifiedAt: time.Now().UTC()}
-	result, err := store.PersistDraftOnce(scope, draftID, in)
-	if err != nil {
-		t.Fatalf("retry persist: %v", err)
-	}
-	if result.PolicyID != reservedPolicyID {
-		t.Fatalf("policy_id = %s want %s", result.PolicyID, reservedPolicyID)
-	}
-}
-
-func TestPostgresStore_supersedesPriorPolicyForScan(t *testing.T) {
-	db := openTestDB(t)
-	store := NewPostgresStore(db)
-
-	scope := OwnerScope{UserID: "user-a", TenantID: "t1"}
-	scanID := uuid.MustParse("550e8400-e29b-41d4-a716-446655440000")
-	wallet := "0x742d35cc6634c0532925a3b844bc454e4438f44e"
-	oldPolicyID := uuid.New()
-
-	now := time.Now().UTC()
-	oldDraftID := uuid.New()
-	if err := db.Create(&domain.CryptoPolicyEntity{
-		ID:                  oldPolicyID,
-		UserID:              scope.UserID,
-		TenantID:            scope.TenantID,
-		ScanID:              scanID,
-		DraftID:             oldDraftID,
-		WalletAddress:       wallet,
-		ChainID:             1,
-		Payload:             domain.JSONMap{"policy_template_id": "tmpl-pq-ready-v2"},
-		OwnershipStatus:     "verified",
-		WalletControlMethod: "eoa_signature",
-		Status:              domain.CryptoPolicyStatusPersisted,
-		PersistedAt:         now,
-		CreatedAt:           now,
-		UpdatedAt:           now,
-	}).Error; err != nil {
-		t.Fatalf("seed old policy: %v", err)
-	}
-
-	draftID := uuid.New()
-	_, err := store.SaveDraft(scope, draftID, &scanID, map[string]any{
-		"policy_template_id": "tmpl-hybrid-classic-v1",
-		"policy_context":     map[string]any{"wallet_address": wallet, "wallet_type": "eoa"},
-	})
-	if err != nil {
-		t.Fatalf("SaveDraft: %v", err)
-	}
-
-	result, err := store.PersistDraftOnce(scope, draftID, PersistDraftInput{
-		WalletAddress: wallet,
-		ChainID:       1,
-		ScanID:        scanID,
-		VerifiedAt:    time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC),
-	})
-	if err != nil {
-		t.Fatalf("PersistDraftOnce replacement: %v", err)
-	}
-	if result.PolicyID == oldPolicyID {
-		t.Fatal("replacement persist should create a new policy id")
-	}
-
-	list, err := store.ListPersistedPoliciesForScan(scope, scanID, 20, 0)
-	if err != nil {
-		t.Fatalf("ListPersistedPoliciesForScan: %v", err)
-	}
-	if len(list.Items) != 1 {
-		t.Fatalf("want exactly one active persisted policy per scan, got %d", len(list.Items))
-	}
-	if list.Items[0].ID != result.PolicyID {
-		t.Fatalf("listed policy id = %s want %s", list.Items[0].ID, result.PolicyID)
-	}
-	if _, err := store.GetPolicy(scope, oldPolicyID); !errors.Is(err, ErrPolicyNotFound) {
-		t.Fatalf("prior policy should be superseded, got %v", err)
+	in.PayloadSHA256 = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+	in.ScanID = uuid.New()
+	if _, err := store.CreatePolicy(scope, in); err != nil {
+		t.Fatalf("recreate after delete: %v", err)
 	}
 }
 
@@ -198,109 +122,69 @@ func TestPostgresStore_walletAndScanReferenceCounts(t *testing.T) {
 
 	scope := OwnerScope{UserID: "user-b", TenantID: ""}
 	scanID := uuid.New()
-	draftID := uuid.New()
 	wallet := "0x742d35cc6634c0532925a3b844bc454e4438f44e"
-
-	_, err := store.SaveDraft(scope, draftID, &scanID, map[string]any{
-		"policy_context": map[string]any{"wallet_address": wallet},
-	})
-	if err != nil {
-		t.Fatalf("SaveDraft: %v", err)
-	}
 
 	walletCounts, err := store.CountPoliciesByWallet(scope, wallet)
 	if err != nil {
 		t.Fatalf("CountPoliciesByWallet: %v", err)
 	}
-	if !walletCounts.Exists || walletCounts.DraftCount != 1 || walletCounts.PolicyCount != 0 {
+	if walletCounts.Exists || walletCounts.PolicyCount != 0 {
 		t.Fatalf("unexpected wallet counts: %#v", walletCounts)
 	}
 
-	scanCounts, err := store.CountPoliciesByScan(scope, scanID)
-	if err != nil {
-		t.Fatalf("CountPoliciesByScan before persist: %v", err)
-	}
-	if scanCounts.Referenced || scanCounts.Count != 0 {
-		t.Fatalf("unexpected scan counts before persist: %#v", scanCounts)
-	}
-
-	if _, err := store.PersistDraftOnce(scope, draftID, PersistDraftInput{
-		WalletAddress: wallet,
-		ChainID:       1,
-		ScanID:        scanID,
-		VerifiedAt:    time.Now().UTC(),
+	if _, err := store.CreatePolicy(scope, CreatePolicyInput{
+		ScanID:                  scanID,
+		WalletAddress:           wallet,
+		ChainID:                 1,
+		Payload:                 map[string]any{"mode": "strict"},
+		PayloadSHA256:           "1111111111111111111111111111111111111111111111111111111111111111",
+		WalletControlVerifiedAt: time.Now().UTC(),
 	}); err != nil {
-		t.Fatalf("PersistDraftOnce: %v", err)
+		t.Fatalf("CreatePolicy: %v", err)
 	}
 
 	walletCounts, err = store.CountPoliciesByWallet(scope, wallet)
 	if err != nil {
-		t.Fatalf("CountPoliciesByWallet after persist: %v", err)
+		t.Fatalf("CountPoliciesByWallet after create: %v", err)
 	}
-	if walletCounts.PolicyCount != 1 || walletCounts.DraftCount != 0 {
-		t.Fatalf("unexpected wallet counts after persist: %#v", walletCounts)
+	if !walletCounts.Exists || walletCounts.PolicyCount != 1 {
+		t.Fatalf("unexpected wallet counts after create: %#v", walletCounts)
 	}
 
-	scanCounts, err = store.CountPoliciesByScan(scope, scanID)
+	scanCounts, err := store.CountPoliciesByScan(scope, scanID)
 	if err != nil {
-		t.Fatalf("CountPoliciesByScan after persist: %v", err)
+		t.Fatalf("CountPoliciesByScan after create: %v", err)
 	}
 	if !scanCounts.Referenced || scanCounts.Count != 1 {
-		t.Fatalf("unexpected scan counts after persist: %#v", scanCounts)
+		t.Fatalf("unexpected scan counts after create: %#v", scanCounts)
 	}
 }
 
-func TestPostgresStore_deleteDraftAndPolicy(t *testing.T) {
+func TestPostgresStore_migrateDropsDraftTables(t *testing.T) {
 	db := openTestDB(t)
-	store := NewPostgresStore(db)
-
-	scope := OwnerScope{UserID: "user-del", TenantID: "t-del"}
-	scanID := uuid.New()
-	draftID := uuid.New()
-	wallet := "0x742d35cc6634c0532925a3b844bc454e4438f44e"
-
-	_, err := store.SaveDraft(scope, draftID, &scanID, map[string]any{
-		"policy_context": map[string]any{"wallet_address": wallet},
-	})
-	if err != nil {
-		t.Fatalf("SaveDraft: %v", err)
+	for _, table := range []string{"crypto_policy_drafts", "draft_persist_state"} {
+		var exists bool
+		if err := db.Raw(`SELECT EXISTS (
+			SELECT 1 FROM information_schema.tables
+			WHERE table_schema = 'public' AND table_name = ?
+		)`, table).Scan(&exists).Error; err != nil {
+			t.Fatalf("check table %s: %v", table, err)
+		}
+		if exists {
+			t.Fatalf("legacy table %s must be dropped after MigrateCPSchema", table)
+		}
 	}
-	if err := store.DeleteDraft(scope, draftID); err != nil {
-		t.Fatalf("DeleteDraft: %v", err)
+	var hasDraftID bool
+	if err := db.Raw(`SELECT EXISTS (
+		SELECT 1 FROM information_schema.columns
+		WHERE table_schema = 'public' AND table_name = 'crypto_policies' AND column_name = 'draft_id'
+	)`).Scan(&hasDraftID).Error; err != nil {
+		t.Fatalf("check draft_id column: %v", err)
 	}
-	if _, err := store.GetDraft(scope, draftID); !errors.Is(err, ErrDraftNotFound) {
-		t.Fatalf("GetDraft after delete: want ErrDraftNotFound, got %v", err)
+	if hasDraftID {
+		t.Fatal("crypto_policies.draft_id must be dropped")
 	}
-
-	draftID2 := uuid.New()
-	_, err = store.SaveDraft(scope, draftID2, &scanID, map[string]any{
-		"policy_context": map[string]any{"wallet_address": wallet},
-	})
-	if err != nil {
-		t.Fatalf("SaveDraft for persist: %v", err)
-	}
-	result, err := store.PersistDraftOnce(scope, draftID2, PersistDraftInput{
-		WalletAddress: wallet,
-		ChainID:       1,
-		ScanID:        scanID,
-		VerifiedAt:    time.Now().UTC(),
-	})
-	if err != nil {
-		t.Fatalf("PersistDraftOnce: %v", err)
-	}
-	if err := store.DeletePolicy(scope, result.PolicyID); err != nil {
-		t.Fatalf("DeletePolicy: %v", err)
-	}
-	if _, err := store.GetPolicy(scope, result.PolicyID); !errors.Is(err, ErrPolicyNotFound) {
-		t.Fatalf("GetPolicy after delete: want ErrPolicyNotFound, got %v", err)
-	}
-	scanCounts, err := store.CountPoliciesByScan(scope, scanID)
-	if err != nil {
-		t.Fatalf("CountPoliciesByScan after delete: %v", err)
-	}
-	if scanCounts.Count != 0 {
-		t.Fatalf("count after delete = %d, want 0", scanCounts.Count)
-	}
+	_ = domain.CryptoPolicyStatusPersisted
 }
 
 func openTestDB(t *testing.T) *gorm.DB {
@@ -323,7 +207,7 @@ func openTestDB(t *testing.T) *gorm.DB {
 		t.Fatalf("MigrateCPSchema: %v", err)
 	}
 	t.Cleanup(func() {
-		_ = db.Exec("TRUNCATE draft_persist_state, crypto_policies, crypto_policy_drafts RESTART IDENTITY CASCADE").Error
+		_ = db.Exec("TRUNCATE crypto_policies RESTART IDENTITY CASCADE").Error
 	})
 	return db
 }
