@@ -12,12 +12,10 @@ import (
 )
 
 const (
-	CryptoPolicyDraftStatusServerDraft = "server_draft"
-	CryptoPolicyStatusPersisted        = "persisted"
-	CryptoPolicyStatusSuperseded       = "superseded"
+	CryptoPolicyStatusPersisted = "persisted"
 )
 
-// JSONMap is a JSONB object column (crypto policy draft/policy payloads).
+// JSONMap is a JSONB object column (crypto policy payloads).
 type JSONMap map[string]any
 
 func (j JSONMap) Value() (driver.Value, error) {
@@ -57,34 +55,22 @@ func (j *JSONMap) Scan(value any) error {
 	return nil
 }
 
-// CryptoPolicyDraftEntity is the durable platform draft row (ADR §8.4.1).
-type CryptoPolicyDraftEntity struct {
-	ID        uuid.UUID      `gorm:"type:uuid;primaryKey" json:"id"`
-	UserID    string         `gorm:"type:text;not null;index" json:"user_id"`
-	TenantID  string         `gorm:"type:text" json:"tenant_id,omitempty"`
-	ScanID    *uuid.UUID     `gorm:"type:uuid" json:"scan_id,omitempty"`
-	Payload   JSONMap        `gorm:"type:jsonb;not null" json:"payload"`
-	Status    string         `gorm:"type:text;not null" json:"status"`
-	CreatedAt time.Time      `json:"created_at"`
-	UpdatedAt time.Time      `json:"updated_at"`
-	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
-}
-
-func (CryptoPolicyDraftEntity) TableName() string { return "crypto_policy_drafts" }
-
-// CryptoPolicyEntity is a persisted crypto policy row (ADR §8.4.2).
+// CryptoPolicyEntity is a persisted crypto policy row (ADR §8.4 / ADR_20260824 remove drafts).
 type CryptoPolicyEntity struct {
 	ID                      uuid.UUID      `gorm:"type:uuid;primaryKey" json:"id"`
 	UserID                  string         `gorm:"type:text;not null;index" json:"user_id"`
 	TenantID                string         `gorm:"type:text" json:"tenant_id,omitempty"`
 	ScanID                  uuid.UUID      `gorm:"type:uuid;not null" json:"scan_id"`
-	DraftID                 uuid.UUID      `gorm:"type:uuid;not null" json:"draft_id"`
 	WalletAddress           string         `gorm:"type:text;not null" json:"wallet_address"`
 	ChainID                 int64          `gorm:"not null" json:"chain_id"`
 	Payload                 JSONMap        `gorm:"type:jsonb;not null" json:"payload"`
+	PayloadSHA256           string         `gorm:"type:text;not null" json:"payload_sha256"`
+	SignedMessageHash       string         `gorm:"type:text" json:"signed_message_hash,omitempty"`
 	OwnershipStatus         string         `gorm:"type:text" json:"ownership_status,omitempty"`
-	WalletControlMethod      string         `gorm:"type:text" json:"wallet_control_method,omitempty"`
+	WalletControlMethod     string         `gorm:"type:text" json:"wallet_control_method,omitempty"`
 	WalletControlVerifiedAt *time.Time     `json:"wallet_control_verified_at,omitempty"`
+	ChallengeIssuedAt       *time.Time     `json:"challenge_issued_at,omitempty"`
+	ChallengeExpiresAt      *time.Time     `json:"challenge_expires_at,omitempty"`
 	Status                  string         `gorm:"type:text;not null;index" json:"status"`
 	PersistedAt             time.Time      `gorm:"not null" json:"persisted_at"`
 	CreatedAt               time.Time      `json:"created_at"`
@@ -93,18 +79,6 @@ type CryptoPolicyEntity struct {
 }
 
 func (CryptoPolicyEntity) TableName() string { return "crypto_policies" }
-
-// DraftPersistStateEntity tracks persist-once idempotence per draft_id (ADR §8.4.3).
-type DraftPersistStateEntity struct {
-	DraftID     uuid.UUID  `gorm:"type:uuid;primaryKey" json:"draft_id"`
-	PolicyID    uuid.UUID  `gorm:"type:uuid;not null" json:"policy_id"`
-	Completed   bool       `gorm:"not null;default:false" json:"completed"`
-	PersistedAt *time.Time `json:"persisted_at,omitempty"`
-	UserID      string     `gorm:"type:text;not null" json:"user_id"`
-	TenantID    string     `gorm:"type:text" json:"tenant_id,omitempty"`
-}
-
-func (DraftPersistStateEntity) TableName() string { return "draft_persist_state" }
 
 // CloneJSONMap returns a shallow copy of a payload map.
 func CloneJSONMap(in map[string]any) map[string]any {
@@ -118,13 +92,13 @@ func CloneJSONMap(in map[string]any) map[string]any {
 	return out
 }
 
-// PolicyPayloadFromDraft builds the normalized persisted payload (CPM §8.2).
-func PolicyPayloadFromDraft(draftPayload map[string]any, draftID, scanID, wallet string, chainID int64, verifiedAt time.Time) map[string]any {
-	out := CloneJSONMap(draftPayload)
+// NormalizePolicyPayload builds the durable payload projection (no raw signature material).
+// Client-supplied payload_sha256 is stripped; the column is the server authority.
+func NormalizePolicyPayload(payload map[string]any, scanID, wallet string, chainID int64, verifiedAt time.Time) map[string]any {
+	out := CloneJSONMap(payload)
 	if out == nil {
 		out = make(map[string]any)
 	}
-	out["draft_id"] = draftID
 	out["scan_id"] = scanID
 	out["wallet_address"] = wallet
 	out["chain_id"] = chainID
@@ -134,6 +108,8 @@ func PolicyPayloadFromDraft(draftPayload map[string]any, draftID, scanID, wallet
 	out["persisted_at"] = verifiedAt.UTC().Format(time.RFC3339)
 	delete(out, "signed_message")
 	delete(out, "signature")
+	delete(out, "payload_sha256")
+	delete(out, "draft_id")
 	return out
 }
 

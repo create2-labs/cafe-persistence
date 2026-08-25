@@ -26,35 +26,29 @@ func TestNormalizeWalletTargetAddress_canonical(t *testing.T) {
 	}
 }
 
-func TestWalletTargetFromPayload_policyContext(t *testing.T) {
+func TestNormalizePolicyPayload_stripsSignatureAndClientHash(t *testing.T) {
 	t.Parallel()
-	addr := "0x742d35cc6634c0532925a3b844bc454e4438f44e"
-	payload := map[string]any{
-		"policy_context": map[string]any{
-			"wallet_address": addr,
-		},
-	}
-	if got := walletTargetFromPayload(payload); got != addr {
-		t.Fatalf("walletTargetFromPayload = %q want %q", got, addr)
-	}
-}
-
-func TestPolicyPayloadFromDraft_stripsSignatureFields(t *testing.T) {
-	t.Parallel()
-	draftID := uuid.New().String()
 	scanID := uuid.New().String()
 	wallet := "0x742d35cc6634c0532925a3b844bc454e4438f44e"
 	verifiedAt := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
-	payload := domain.PolicyPayloadFromDraft(map[string]any{
+	payload := domain.NormalizePolicyPayload(map[string]any{
 		"signed_message": "msg",
 		"signature":      "sig",
+		"payload_sha256": "deadbeef",
+		"draft_id":       "should-go",
 		"mode":           "strict",
-	}, draftID, scanID, wallet, 1, verifiedAt)
+	}, scanID, wallet, 1, verifiedAt)
 	if _, ok := payload["signature"]; ok {
 		t.Fatal("signature must be stripped")
 	}
 	if _, ok := payload["signed_message"]; ok {
 		t.Fatal("signed_message must be stripped")
+	}
+	if _, ok := payload["payload_sha256"]; ok {
+		t.Fatal("client payload_sha256 must be stripped from JSON payload")
+	}
+	if _, ok := payload["draft_id"]; ok {
+		t.Fatal("draft_id must not be stored in payload")
 	}
 	if payload["ownership_status"] != "verified" {
 		t.Fatalf("ownership_status = %#v", payload["ownership_status"])

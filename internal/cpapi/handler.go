@@ -16,10 +16,7 @@ import (
 
 // Store is the owner-scoped CP persistence surface consumed by HTTP handlers.
 type Store interface {
-	SaveDraft(scope cpstore.OwnerScope, draftID uuid.UUID, scanID *uuid.UUID, payload map[string]any) (cpstore.DraftRecord, error)
-	GetDraft(scope cpstore.OwnerScope, draftID uuid.UUID) (cpstore.DraftRecord, error)
-	DeleteDraft(scope cpstore.OwnerScope, draftID uuid.UUID) error
-	PersistDraftOnce(scope cpstore.OwnerScope, draftID uuid.UUID, in cpstore.PersistDraftInput) (cpstore.PersistDraftResult, error)
+	CreatePolicy(scope cpstore.OwnerScope, in cpstore.CreatePolicyInput) (cpstore.CreatePolicyResult, error)
 	GetPolicy(scope cpstore.OwnerScope, policyID uuid.UUID) (cpstore.PolicyRecord, error)
 	DeletePolicy(scope cpstore.OwnerScope, policyID uuid.UUID) error
 	ListPersistedPoliciesForScan(scope cpstore.OwnerScope, scanID uuid.UUID, limit, offset int) (cpstore.ListPoliciesResult, error)
@@ -61,12 +58,20 @@ func (h *Handler) requireStore(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
-type draftUpsertBody struct {
-	ScanID  *uuid.UUID     `json:"scan_id"`
-	Payload map[string]any `json:"payload"`
+type createPolicyRequest struct {
+	ScanID                  uuid.UUID      `json:"scan_id"`
+	WalletAddress           string         `json:"wallet_address"`
+	ChainID                 int64          `json:"chain_id"`
+	Payload                 map[string]any `json:"payload"`
+	PayloadSHA256           string         `json:"payload_sha256"`
+	SignedMessageHash       string         `json:"signed_message_hash"`
+	WalletControlMethod     string         `json:"wallet_control_method"`
+	WalletControlVerifiedAt time.Time      `json:"wallet_control_verified_at"`
+	ChallengeIssuedAt       *time.Time     `json:"challenge_issued_at"`
+	ChallengeExpiresAt      *time.Time     `json:"challenge_expires_at"`
 }
 
-func (h *Handler) UpsertDraft(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) CreatePolicy(w http.ResponseWriter, r *http.Request) {
 	scope, ok := h.requireOwnerScope(w, r)
 	if !ok {
 		return
@@ -74,108 +79,33 @@ func (h *Handler) UpsertDraft(w http.ResponseWriter, r *http.Request) {
 	if !h.requireStore(w, r) {
 		return
 	}
-	draftID, err := parseDraftIDPath(r)
-	if err != nil {
-		writeBadRequest(w, r, err.Error())
-		return
-	}
-	var req draftUpsertBody
+	var req createPolicyRequest
 	if err := decodeJSON(r, &req); err != nil {
 		writeBadRequest(w, r, "invalid request body")
 		return
 	}
-	if req.Payload == nil {
-		req.Payload = map[string]any{}
-	}
-	rec, err := h.store.SaveDraft(scope, draftID, req.ScanID, req.Payload)
-	if err != nil {
-		h.writeStoreError(w, r, err)
+	if strings.TrimSpace(req.WalletAddress) == "" || req.ChainID < 1 || req.ScanID == uuid.Nil ||
+		strings.TrimSpace(req.PayloadSHA256) == "" || req.Payload == nil || req.WalletControlVerifiedAt.IsZero() {
+		writeBadRequest(w, r, "scan_id, wallet_address, chain_id, payload, payload_sha256, and wallet_control_verified_at are required")
 		return
 	}
-	writeJSON(w, http.StatusOK, draftRowJSON(rec))
-}
-
-func (h *Handler) GetDraft(w http.ResponseWriter, r *http.Request) {
-	scope, ok := h.requireOwnerScope(w, r)
-	if !ok {
-		return
-	}
-	if !h.requireStore(w, r) {
-		return
-	}
-	draftID, err := parseDraftIDPath(r)
-	if err != nil {
-		writeBadRequest(w, r, err.Error())
-		return
-	}
-	rec, err := h.store.GetDraft(scope, draftID)
-	if err != nil {
-		h.writeStoreError(w, r, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, draftRowJSON(rec))
-}
-
-func (h *Handler) DeleteDraft(w http.ResponseWriter, r *http.Request) {
-	scope, ok := h.requireOwnerScope(w, r)
-	if !ok {
-		return
-	}
-	if !h.requireStore(w, r) {
-		return
-	}
-	draftID, err := parseDraftIDPath(r)
-	if err != nil {
-		writeBadRequest(w, r, err.Error())
-		return
-	}
-	if err := h.store.DeleteDraft(scope, draftID); err != nil {
-		h.writeStoreError(w, r, err)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
-type persistDraftRequest struct {
-	WalletAddress           string    `json:"wallet_address"`
-	ChainID                 int64     `json:"chain_id"`
-	ScanID                  uuid.UUID `json:"scan_id"`
-	WalletControlVerifiedAt time.Time `json:"wallet_control_verified_at"`
-}
-
-func (h *Handler) PersistDraft(w http.ResponseWriter, r *http.Request) {
-	scope, ok := h.requireOwnerScope(w, r)
-	if !ok {
-		return
-	}
-	if !h.requireStore(w, r) {
-		return
-	}
-	draftID, err := parseDraftIDPath(r)
-	if err != nil {
-		writeBadRequest(w, r, err.Error())
-		return
-	}
-	var req persistDraftRequest
-	if err := decodeJSON(r, &req); err != nil {
-		writeBadRequest(w, r, "invalid request body")
-		return
-	}
-	if strings.TrimSpace(req.WalletAddress) == "" || req.ChainID < 1 || req.ScanID == uuid.Nil || req.WalletControlVerifiedAt.IsZero() {
-		writeBadRequest(w, r, "wallet_address, chain_id, scan_id, and wallet_control_verified_at are required")
-		return
-	}
-	result, err := h.store.PersistDraftOnce(scope, draftID, cpstore.PersistDraftInput{
-		WalletAddress: req.WalletAddress,
-		ChainID:       req.ChainID,
-		ScanID:        req.ScanID,
-		VerifiedAt:    req.WalletControlVerifiedAt,
+	result, err := h.store.CreatePolicy(scope, cpstore.CreatePolicyInput{
+		ScanID:                  req.ScanID,
+		WalletAddress:           req.WalletAddress,
+		ChainID:                 req.ChainID,
+		Payload:                 req.Payload,
+		PayloadSHA256:           req.PayloadSHA256,
+		SignedMessageHash:       req.SignedMessageHash,
+		WalletControlMethod:     req.WalletControlMethod,
+		WalletControlVerifiedAt: req.WalletControlVerifiedAt,
+		ChallengeIssuedAt:       req.ChallengeIssuedAt,
+		ChallengeExpiresAt:      req.ChallengeExpiresAt,
 	})
 	if err != nil {
 		h.writeStoreError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, persistDraftResponseJSON(draftID, result))
+	writeJSON(w, http.StatusCreated, createPolicyResponseJSON(result))
 }
 
 func (h *Handler) GetPolicy(w http.ResponseWriter, r *http.Request) {
@@ -273,15 +203,10 @@ func (h *Handler) CountPoliciesByWallet(w http.ResponseWriter, r *http.Request) 
 		h.writeStoreError(w, r, err)
 		return
 	}
-	body := map[string]any{
+	writeJSON(w, http.StatusOK, map[string]any{
 		"exists":       counts.Exists,
 		"policy_count": counts.PolicyCount,
-		"draft_count":  counts.DraftCount,
-	}
-	if counts.PlatformDraftID != "" {
-		body["platform_draft_id"] = counts.PlatformDraftID
-	}
-	writeJSON(w, http.StatusOK, body)
+	})
 }
 
 func (h *Handler) CountPoliciesByScan(w http.ResponseWriter, r *http.Request) {
@@ -315,17 +240,18 @@ func (h *Handler) CountPoliciesByScan(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) writeStoreError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
-	case errors.Is(err, cpstore.ErrDraftNotFound):
-		writeDraftNotFound(w, r)
 	case errors.Is(err, cpstore.ErrPolicyNotFound):
 		writePolicyNotFound(w, r)
-	case errors.Is(err, cpstore.ErrDraftAlreadyPersisted):
-		writeDraftAlreadyPersisted(w, r)
+	case errors.Is(err, cpstore.ErrPolicyAlreadyExists):
+		writePolicyAlreadyExists(w, r)
 	case errors.Is(err, cpstore.ErrForbidden):
 		writeForbidden(w, r)
 	case errors.Is(err, cpstore.ErrInvalidWalletAddress):
 		writeInvalidWalletAddress(w, r, "wallet_address must be a normalized EVM address")
-	case errors.Is(err, cpstore.ErrScanIDRequired), errors.Is(err, cpstore.ErrScanIDMismatch):
+	case errors.Is(err, cpstore.ErrScanIDRequired),
+		errors.Is(err, cpstore.ErrPayloadSHA256Required),
+		errors.Is(err, cpstore.ErrPayloadRequired),
+		errors.Is(err, cpstore.ErrInvalidChainID):
 		writeBadRequest(w, r, err.Error())
 	case errors.Is(err, cpstore.ErrOwnerRequired):
 		writeBadRequest(w, r, "X-User-Id header is required")
@@ -334,33 +260,15 @@ func (h *Handler) writeStoreError(w http.ResponseWriter, r *http.Request, err er
 	}
 }
 
-func draftRowJSON(rec cpstore.DraftRecord) map[string]any {
-	out := map[string]any{
-		"id":         rec.ID.String(),
-		"user_id":    rec.UserID,
-		"payload":    rec.Payload,
-		"status":     rec.Status,
-		"created_at": rec.CreatedAt.UTC().Format(time.RFC3339Nano),
-		"updated_at": rec.UpdatedAt.UTC().Format(time.RFC3339Nano),
-	}
-	if rec.TenantID != "" {
-		out["tenant_id"] = rec.TenantID
-	}
-	if rec.ScanID != nil {
-		out["scan_id"] = rec.ScanID.String()
-	}
-	return out
-}
-
 func policyRowJSON(rec cpstore.PolicyRecord) map[string]any {
 	out := map[string]any{
 		"id":              rec.ID.String(),
 		"user_id":         rec.UserID,
 		"scan_id":         rec.ScanID.String(),
-		"draft_id":        rec.DraftID.String(),
 		"wallet_address":  rec.WalletAddress,
 		"chain_id":        rec.ChainID,
 		"payload":         rec.Payload,
+		"payload_sha256":  rec.PayloadSHA256,
 		"status":          rec.Status,
 		"persisted_at":    rec.PersistedAt.UTC().Format(time.RFC3339Nano),
 		"created_at":      rec.CreatedAt.UTC().Format(time.RFC3339Nano),
@@ -368,6 +276,9 @@ func policyRowJSON(rec cpstore.PolicyRecord) map[string]any {
 	}
 	if rec.TenantID != "" {
 		out["tenant_id"] = rec.TenantID
+	}
+	if rec.SignedMessageHash != "" {
+		out["signed_message_hash"] = rec.SignedMessageHash
 	}
 	if rec.OwnershipStatus != "" {
 		out["ownership_status"] = rec.OwnershipStatus
@@ -378,25 +289,27 @@ func policyRowJSON(rec cpstore.PolicyRecord) map[string]any {
 	if rec.WalletControlVerifiedAt != nil {
 		out["wallet_control_verified_at"] = rec.WalletControlVerifiedAt.UTC().Format(time.RFC3339Nano)
 	}
+	if rec.ChallengeIssuedAt != nil {
+		out["challenge_issued_at"] = rec.ChallengeIssuedAt.UTC().Format(time.RFC3339Nano)
+	}
+	if rec.ChallengeExpiresAt != nil {
+		out["challenge_expires_at"] = rec.ChallengeExpiresAt.UTC().Format(time.RFC3339Nano)
+	}
 	return out
 }
 
-func persistDraftResponseJSON(draftID uuid.UUID, result cpstore.PersistDraftResult) map[string]any {
+func createPolicyResponseJSON(result cpstore.CreatePolicyResult) map[string]any {
 	return map[string]any{
 		"policy_id":             result.PolicyID.String(),
-		"draft_id":              draftID.String(),
 		"scan_id":               result.ScanID.String(),
 		"wallet_address":        result.WalletAddress,
 		"chain_id":              result.ChainID,
+		"payload_sha256":        result.PayloadSHA256,
 		"status":                "persisted",
 		"ownership_status":      "verified",
 		"wallet_control_method": "eoa_signature",
 		"persisted_at":          result.PersistedAt.UTC().Format(time.RFC3339Nano),
 	}
-}
-
-func parseDraftIDPath(r *http.Request) (uuid.UUID, error) {
-	return parseUUIDPath(r, "draft_id")
 }
 
 func parsePolicyIDPath(r *http.Request) (uuid.UUID, error) {

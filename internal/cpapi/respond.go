@@ -34,10 +34,6 @@ func writeInvalidWalletAddress(w http.ResponseWriter, r *http.Request, message s
 	writeError(w, r, http.StatusBadRequest, "INVALID_WALLET_ADDRESS", message)
 }
 
-func writeDraftNotFound(w http.ResponseWriter, r *http.Request) {
-	writeError(w, r, http.StatusNotFound, "DRAFT_NOT_FOUND", "Draft not found.")
-}
-
 func writePolicyNotFound(w http.ResponseWriter, r *http.Request) {
 	writeError(w, r, http.StatusNotFound, "POLICY_NOT_FOUND", "Policy not found.")
 }
@@ -46,6 +42,6 @@ func writeForbidden(w http.ResponseWriter, r *http.Request) {
 	writeError(w, r, http.StatusForbidden, "FORBIDDEN", "Resource is not accessible for the scoped owner.")
 }
 
-func writeDraftAlreadyPersisted(w http.ResponseWriter, r *http.Request) {
-	writeError(w, r, http.StatusConflict, "DRAFT_ALREADY_PERSISTED", "Draft has already been persisted for this owner.")
+func writePolicyAlreadyExists(w http.ResponseWriter, r *http.Request) {
+	writeError(w, r, http.StatusConflict, "POLICY_ALREADY_EXISTS", "An active crypto policy already exists for this wallet.")
 }
