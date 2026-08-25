@@ -167,6 +167,31 @@ Regenerate index golden after DDL changes:
 go run ./scripts/gen_cp_indexes_golden.go
 ```
 
+### RD-P3 checklist scripts
+
+Manual / CI-adjacent checks for the PR plan test boxes:
+
+```bash
+# All (Postgres required for 01; use --skip-legacy if down)
+./scripts/test-rd-p3-all.sh
+./scripts/test-rd-p3-all.sh --skip-legacy
+
+# Or individually:
+./scripts/test-rd-p3-01-legacy-drop.sh          # draft tables → drop → policy recreate (needs Postgres / psql)
+./scripts/test-rd-p3-02-w1-conflict.sh         # 409 then DELETE+201 (sqlite unit; +integration if Postgres up)
+./scripts/test-rd-p3-03-no-draft-routes.sh     # no /drafts* in contract
+
+# Against a running persistence (:8082):
+CP_BASE=http://127.0.0.1:8082/internal/cp/v1 \
+CAFE_PERSISTENCE_SERVICE_TOKEN=dev-cafe-auth06-shared-internal-token \
+  ./scripts/test-rd-p3-02-w1-conflict.sh --live
+CP_BASE=http://127.0.0.1:8082/internal/cp/v1 \
+CAFE_PERSISTENCE_SERVICE_TOKEN=dev-cafe-auth06-shared-internal-token \
+  ./scripts/test-rd-p3-03-no-draft-routes.sh --live
+```
+
+If `psql` is missing but Postgres runs in Docker: `POSTGRES_DOCKER=<container> ./scripts/test-rd-p3-01-legacy-drop.sh`.
+
 ## Health probes (PERS-D2b)
 
 Internal HTTP server (not exposed on public edge):
