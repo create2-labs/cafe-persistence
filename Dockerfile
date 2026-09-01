@@ -1,4 +1,4 @@
-FROM golang:1.26.4 AS ci
+FROM golang:1.26.6 AS ci
 WORKDIR /app
 
 COPY go.mod go.sum ./
@@ -7,7 +7,7 @@ RUN go mod download
 COPY . .
 RUN go test ./...
 
-FROM golang:1.26.4-bookworm AS builder
+FROM golang:1.26.6-bookworm AS builder
 
 ENV CGO_ENABLED=0
 
@@ -20,17 +20,11 @@ COPY . .
 
 RUN go build -o persistence ./cmd/persistence/main.go
 
-FROM debian:bookworm-slim AS runtime
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+FROM gcr.io/distroless/base-debian12:nonroot
 
 WORKDIR /app
 
 COPY --from=builder /app/persistence /app/persistence
 COPY --from=builder /app/config.yaml /app/config.yaml
 
-ENTRYPOINT []
-CMD ["./persistence"]
+ENTRYPOINT ["/app/persistence"]
