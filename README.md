@@ -201,7 +201,13 @@ Internal HTTP server (not exposed on public edge):
 | `GET /health` | Liveness — process up |
 | `GET /ready` | Readiness — scan migrations applied + NATS connected + scan subscriptions active |
 
-Compose healthcheck uses `/ready` (see `cafe-deploy/compose/20-discovery.yml`).
+Compose healthcheck runs `/app/healthcheck` (distroless image has no shell/curl); the binary probes `GET /ready` on `PERSISTENCE_HEALTH_PORT` (see `cafe-deploy/compose/20-discovery.yml`).
+
+Manual check inside the container:
+
+```bash
+docker exec cafe-persistence-dev /app/healthcheck && echo OK
+```
 
 ## Schéma Postgres : rôle des migrations et des golden files
 
