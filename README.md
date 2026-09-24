@@ -21,10 +21,18 @@ go build -o persistence ./cmd/persistence/main.go
 docker build -f Dockerfile -t oleglod/cafe-persistence:local .
 ```
 
-### Analyse statique
+### Analyse statique / CI
+
+Stage Docker `ci` (aligné Discovery / CPM) : `golangci-lint` → `go test` → `govulncheck`.
 
 ```bash
+docker build --target ci -t cafe-persistence:ci .
+docker run --rm cafe-persistence:ci
+
+# Local equivalent
 golangci-lint run ./...
+go test ./...
+govulncheck ./...
 ```
 
 `deadcode` sans options ne suit que le binaire **production** (`main`) : le module CP (`internal/cpstore`) et les routes internes apparaissent « morts » tant qu’ils ne sont reliés qu’aux tests (`-test`) ou aux tests Postgres (`-tags=integration`).
