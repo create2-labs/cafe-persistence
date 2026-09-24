@@ -1,0 +1,17 @@
+# Git / IDE
+.git
+.gitignore
+.idea/
+.vscode/
+
+# Local module cache & build artifacts (must not enter image context)
+.gomodcache/
+/persistence
+*.exe
+*.test
+*.out
+
+# CI / docs noise
+.github/
+reports/
+*.md
