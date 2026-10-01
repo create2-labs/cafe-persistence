@@ -136,6 +136,9 @@ func assertWalletPlanLimitStubNoCryptoPosture(t *testing.T, stored domain.ScanRe
 	if stored.Networks != "" {
 		t.Fatalf("networks must be empty, got %q", stored.Networks)
 	}
+	if stored.Delegations != "" {
+		t.Fatalf("delegations must be empty, got %q", stored.Delegations)
+	}
 	if stored.Connections != "" {
 		t.Fatalf("connections must be empty, got %q", stored.Connections)
 	}

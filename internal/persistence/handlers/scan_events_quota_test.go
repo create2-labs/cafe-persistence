@@ -160,7 +160,7 @@ func TestCommitWalletCompletion_AtLimitOneRichOneStub(t *testing.T) {
 			if row.Address != address {
 				t.Fatalf("stub must keep address, got %q", row.Address)
 			}
-			if row.PublicKey != "" || row.KeyExposed || row.Networks != "" || row.Connections != "" {
+			if row.PublicKey != "" || row.KeyExposed || row.Networks != "" || row.Delegations != "" || row.Connections != "" {
 				t.Fatalf("stub must strip exploitable fields: %+v", row)
 			}
 		default:

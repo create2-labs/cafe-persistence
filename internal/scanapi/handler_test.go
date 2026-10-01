@@ -270,6 +270,44 @@ func TestScanAPI_GetWalletScan_OK(t *testing.T) {
 	}
 }
 
+func TestScanAPI_GetWalletScan_DelegationsAndUnknown(t *testing.T) {
+	db := setupScanAPITestDB(t)
+	userID := uuid.New()
+	scanID := uuid.New()
+	delegations := `[{"chain_id":1,"delegated_address":"0x1111111111111111111111111111111111111111"}]`
+	row := domain.ScanResultEntity{
+		ID: scanID, UserID: userID, Address: "0xabc", Status: scan.StateSUCCESS,
+		Type: domain.AccountTypeUnknown, Algorithm: "", NISTLevel: 0,
+		Delegations: delegations, Networks: "[]", Connections: "[]",
+	}
+	if err := db.Create(&row).Error; err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	ts := newTestScanAPIServer(t, newMemoryPendingRepo(), db)
+	defer ts.Close()
+
+	url := ts.URL + scanroutes.Join(scanroutes.WalletScanByID)
+	url = strings.Replace(url, "{scan_id}", scanID.String(), 1)
+	resp := doAuthRequest(t, http.MethodGet, url, userID, nil)
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body["type"] != string(domain.AccountTypeUnknown) {
+		t.Fatalf("type = %#v", body["type"])
+	}
+	if body["delegations"] != delegations {
+		t.Fatalf("delegations = %#v", body["delegations"])
+	}
+	if _, ok := body["is_erc4337"]; !ok {
+		t.Fatal("is_erc4337 must remain on the row")
+	}
+}
+
 func TestScanAPI_DeleteWalletScan_OK(t *testing.T) {
 	db := setupScanAPITestDB(t)
 	userID := uuid.New()

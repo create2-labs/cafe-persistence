@@ -181,6 +181,7 @@ func (h *ScanEventHandler) handleWalletCompleted(ctx context.Context, msg *nats.
 		log.Error().Err(err).Str("scan_id", msg.ScanID.String()).Msg("persistence: decode wallet result failed")
 		return err
 	}
+	domain.EnsureScanResultDelegations(&result)
 	domain.NormalizeScanResultWalletKind(&result)
 	log.Debug().Str("scan_id", msg.ScanID.String()).Msg("persistence: wallet result decoded OK")
 	entity := domain.FromScanResult(msg.UserID, &result)
@@ -227,6 +228,12 @@ func (h *ScanEventHandler) publishWalletObserved(msg *nats.ScanCompletedMessage,
 	meta := walletobservation.ExportMetaForScanJob(msg.ScanID)
 	ev := walletobservation.ToWalletObservedEvent(meta, result, h.chainIDsByNetwork)
 	if err := ev.Validate(); err != nil {
+		if result != nil && result.Algorithm == "" {
+			log.Info().
+				Str("scan_id", msg.ScanID.String()).
+				Msg("persistence: wallet.observed skipped (empty algorithm)")
+			return
+		}
 		log.Error().Err(err).Str("scan_id", msg.ScanID.String()).Msg("persistence: wallet.observed export validation failed")
 		return
 	}
