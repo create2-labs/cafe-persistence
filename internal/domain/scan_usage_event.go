@@ -16,8 +16,10 @@ const (
 	ScanUsageKindEndpoint ScanUsageKind = "endpoint"
 )
 
-// ScanUsageEventEntity is an append-only ledger row for plan quota (IMM-6b P1).
-// One row per completed-success scan_id; never deleted or updated.
+// ScanUsageEventEntity is the plan-quota ledger row for one scan_id (IMM-6b P1).
+// A row reserves the credit before the scan runs and counts as a success.
+// Completion keeps it when the scan has a result, including wallet type unknown.
+// A failure without a result deletes it. The scan_id stays unique.
 type ScanUsageEventEntity struct {
 	ID         uuid.UUID     `gorm:"type:char(36);primary_key" json:"id"`
 	UserID     uuid.UUID     `gorm:"type:char(36);not null" json:"user_id"`

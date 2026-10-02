@@ -105,7 +105,12 @@ func (w *TLSWriter) OnPlanLimitExceededInTx(tx *gorm.DB, scanID uuid.UUID, userI
 
 // OnFailed updates the row by scan_id; inserts on replay when the row is missing.
 func (w *TLSWriter) OnFailed(scanID uuid.UUID, userID *uuid.UUID, url, errMsg string) error {
-	res := w.db.Model(&domain.TLSScanResultEntity{}).Where("id = ?", scanID).
+	return w.OnFailedInTx(w.db, scanID, userID, url, errMsg)
+}
+
+// OnFailedInTx is the transactional variant of OnFailed.
+func (w *TLSWriter) OnFailedInTx(tx *gorm.DB, scanID uuid.UUID, userID *uuid.UUID, url, errMsg string) error {
+	res := tx.Model(&domain.TLSScanResultEntity{}).Where("id = ?", scanID).
 		Updates(map[string]interface{}{
 			"status":     scan.StateFAILED,
 			"error":      errMsg,
@@ -120,7 +125,7 @@ func (w *TLSWriter) OnFailed(scanID uuid.UUID, userID *uuid.UUID, url, errMsg st
 			ProtocolVersion: "unknown", NISTLevel: domain.NISTLevel1,
 			RiskScore: 0, PQCRisk: "unknown", Status: scan.StateFAILED, Error: errMsg,
 		}
-		return w.db.Create(ent).Error
+		return tx.Create(ent).Error
 	}
 	return nil
 }
@@ -221,7 +226,12 @@ func (w *WalletWriter) OnPlanLimitExceededInTx(tx *gorm.DB, scanID, userID uuid.
 
 // OnFailed updates the row by scan_id; inserts on replay when the row is missing.
 func (w *WalletWriter) OnFailed(scanID, userID uuid.UUID, address, errMsg string) error {
-	res := w.db.Model(&domain.ScanResultEntity{}).Where("id = ?", scanID).
+	return w.OnFailedInTx(w.db, scanID, userID, address, errMsg)
+}
+
+// OnFailedInTx is the transactional variant of OnFailed.
+func (w *WalletWriter) OnFailedInTx(tx *gorm.DB, scanID, userID uuid.UUID, address, errMsg string) error {
+	res := tx.Model(&domain.ScanResultEntity{}).Where("id = ?", scanID).
 		Updates(map[string]interface{}{
 			"status":     scan.StateFAILED,
 			"error":      errMsg,
@@ -235,7 +245,7 @@ func (w *WalletWriter) OnFailed(scanID, userID uuid.UUID, address, errMsg string
 			ID: scanID, UserID: userID, Address: address,
 			Status: scan.StateFAILED, Error: errMsg,
 		}
-		return w.db.Create(ent).Error
+		return tx.Create(ent).Error
 	}
 	return nil
 }

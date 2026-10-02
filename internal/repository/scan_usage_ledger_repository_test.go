@@ -206,3 +206,56 @@ func TestScanUsageLedger_RecordSuccessUsageIfUnderLimit_Concurrent(t *testing.T)
 		t.Fatalf("want exactly 1 concurrent slot taker, got %d", recorded)
 	}
 }
+
+func TestScanUsageLedger_HasAndReleaseByScanID(t *testing.T) {
+	db, repo := setupScanUsageLedgerTestDB(t)
+	userID := uuid.New()
+	kept := uuid.New()
+	released := uuid.New()
+
+	if err := repo.RecordSuccessUsage(userID, kept, domain.ScanUsageKindWallet); err != nil {
+		t.Fatalf("record kept: %v", err)
+	}
+	if err := repo.RecordSuccessUsage(userID, released, domain.ScanUsageKindWallet); err != nil {
+		t.Fatalf("record released: %v", err)
+	}
+
+	hasKept, err := repo.HasSuccessUsageForScanInTx(db, kept)
+	if err != nil {
+		t.Fatalf("has kept: %v", err)
+	}
+	if !hasKept {
+		t.Fatal("want ledger row for kept scan")
+	}
+	missing, err := repo.HasSuccessUsageForScanInTx(db, uuid.New())
+	if err != nil {
+		t.Fatalf("has missing: %v", err)
+	}
+	if missing {
+		t.Fatal("unknown scan_id must not have a ledger row")
+	}
+
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		return repo.ReleaseSuccessUsageByScanIDInTx(tx, released)
+	}); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	if err := repo.ReleaseSuccessUsageByScanIDInTx(db, released); err != nil {
+		t.Fatalf("second release: %v", err)
+	}
+
+	stillReleased, err := repo.HasSuccessUsageForScanInTx(db, released)
+	if err != nil {
+		t.Fatalf("has released: %v", err)
+	}
+	if stillReleased {
+		t.Fatal("released scan_id must leave the ledger")
+	}
+	stillKept, err := repo.HasSuccessUsageForScanInTx(db, kept)
+	if err != nil {
+		t.Fatalf("has kept after release: %v", err)
+	}
+	if !stillKept {
+		t.Fatal("release must not delete another scan_id")
+	}
+}

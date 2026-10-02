@@ -25,6 +25,7 @@ func setupQuotaCompletionTest(t *testing.T) (*ScanEventHandler, *gorm.DB, uuid.U
 	if err := db.AutoMigrate(
 		&domain.ScanUsageEventEntity{},
 		&domain.ScanResultEntity{},
+		&domain.TLSScanResultEntity{},
 		&domain.User{},
 		&domain.Plan{},
 	); err != nil {
@@ -209,5 +210,301 @@ func TestCommitWalletCompletion_UnlimitedAlwaysRecordsLedger(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("want 1 ledger row, got %d", count)
+	}
+}
+
+func TestCommitWalletCompletion_ExistingReservationConfirmsAtLimit(t *testing.T) {
+	handler, db, userID, planID := setupQuotaCompletionTest(t)
+	setPlanLimit(t, db, planID, "wallet_scan_limit", 1)
+
+	scanID := uuid.New()
+	address := "0xreserved"
+	seedUsage(t, db, userID, scanID, domain.ScanUsageKindWallet)
+	if err := storage.NewWalletWriter(db).OnStarted(scanID, userID, address); err != nil {
+		t.Fatalf("OnStarted: %v", err)
+	}
+
+	rich := walletResult(address, domain.AccountTypeEOA)
+	acquired := commitWallet(t, handler, userID, scanID, address, rich)
+	if !acquired {
+		t.Fatal("existing reservation must confirm the scan, not reject it as over limit")
+	}
+	assertUsageCount(t, db, userID, domain.ScanUsageKindWallet, 1)
+	assertWalletStatus(t, db, scanID, scan.StateSUCCESS, "")
+}
+
+func TestCommitWalletCompletion_UnknownResultKeepsReservation(t *testing.T) {
+	handler, db, userID, planID := setupQuotaCompletionTest(t)
+	setPlanLimit(t, db, planID, "wallet_scan_limit", 1)
+
+	scanID := uuid.New()
+	address := "0xunknown"
+	seedUsage(t, db, userID, scanID, domain.ScanUsageKindWallet)
+	if err := storage.NewWalletWriter(db).OnStarted(scanID, userID, address); err != nil {
+		t.Fatalf("OnStarted: %v", err)
+	}
+
+	unknown := walletResult(address, domain.AccountTypeUnknown)
+	if !commitWallet(t, handler, userID, scanID, address, unknown) {
+		t.Fatal("unknown result must keep the reserved credit")
+	}
+	if !commitWallet(t, handler, userID, scanID, address, unknown) {
+		t.Fatal("a second unknown completion must not take another credit")
+	}
+	assertUsageCount(t, db, userID, domain.ScanUsageKindWallet, 1)
+
+	var row domain.ScanResultEntity
+	if err := db.Where("id = ?", scanID).First(&row).Error; err != nil {
+		t.Fatalf("load row: %v", err)
+	}
+	if row.Status != scan.StateSUCCESS {
+		t.Fatalf("status: want %s, got %s", scan.StateSUCCESS, row.Status)
+	}
+	if row.Type != domain.AccountTypeUnknown {
+		t.Fatalf("type: want %s, got %s", domain.AccountTypeUnknown, row.Type)
+	}
+}
+
+func TestCommitWalletCompletion_TwoCompletionsOneLedgerRow(t *testing.T) {
+	handler, db, userID, planID := setupQuotaCompletionTest(t)
+	setPlanLimit(t, db, planID, "wallet_scan_limit", 1)
+
+	scanID := uuid.New()
+	address := "0xtwice"
+	if err := storage.NewWalletWriter(db).OnStarted(scanID, userID, address); err != nil {
+		t.Fatalf("OnStarted: %v", err)
+	}
+	rich := walletResult(address, domain.AccountTypeEOA)
+
+	if !commitWallet(t, handler, userID, scanID, address, rich) {
+		t.Fatal("first completion must acquire the only credit")
+	}
+	if !commitWallet(t, handler, userID, scanID, address, rich) {
+		t.Fatal("second completion of the same scan_id must confirm the existing row")
+	}
+	assertUsageCount(t, db, userID, domain.ScanUsageKindWallet, 1)
+	assertWalletStatus(t, db, scanID, scan.StateSUCCESS, "")
+}
+
+func TestHandleWalletFailed_ReleasesReservation(t *testing.T) {
+	handler, db, userID, planID := setupQuotaCompletionTest(t)
+	setPlanLimit(t, db, planID, "wallet_scan_limit", 1)
+	handler.redisCache = storage.NewRedisCache(&memRedis{values: map[string]string{}})
+
+	scanID := uuid.New()
+	otherID := uuid.New()
+	address := "0xnoreult"
+	seedUsage(t, db, userID, scanID, domain.ScanUsageKindWallet)
+	seedUsage(t, db, userID, otherID, domain.ScanUsageKindWallet)
+	if err := storage.NewWalletWriter(db).OnStarted(scanID, userID, address); err != nil {
+		t.Fatalf("OnStarted: %v", err)
+	}
+
+	err := handler.HandleFailed(&nats.ScanFailedMessage{
+		ScanID: scanID, Kind: "wallet", UserID: userID, Address: address, Error: "rpc down",
+	})
+	if err != nil {
+		t.Fatalf("HandleFailed: %v", err)
+	}
+	assertUsageCount(t, db, userID, domain.ScanUsageKindWallet, 1)
+	if _, err := usageForScan(db, scanID); err == nil {
+		t.Fatal("failed scan must drop its ledger row")
+	}
+	if _, err := usageForScan(db, otherID); err != nil {
+		t.Fatalf("other reservation must stay: %v", err)
+	}
+	assertWalletStatus(t, db, scanID, scan.StateFAILED, "rpc down")
+}
+
+func TestHandleWalletFailed_AfterSuccessKeepsUsage(t *testing.T) {
+	handler, db, userID, _ := setupQuotaCompletionTest(t)
+	handler.redisCache = storage.NewRedisCache(&memRedis{values: map[string]string{}})
+
+	scanID := uuid.New()
+	address := "0xdone"
+	seedUsage(t, db, userID, scanID, domain.ScanUsageKindWallet)
+	rich := walletResult(address, domain.AccountTypeEOA)
+	entity := domain.FromScanResult(userID, rich)
+	entity.ID = scanID
+	entity.Status = scan.StateSUCCESS
+	if err := db.Create(entity).Error; err != nil {
+		t.Fatalf("seed success: %v", err)
+	}
+
+	err := handler.HandleFailed(&nats.ScanFailedMessage{
+		ScanID: scanID, Kind: "wallet", UserID: userID, Address: address, Error: "late",
+	})
+	if err != nil {
+		t.Fatalf("HandleFailed: %v", err)
+	}
+	assertUsageCount(t, db, userID, domain.ScanUsageKindWallet, 1)
+	assertWalletStatus(t, db, scanID, scan.StateSUCCESS, "")
+}
+
+func TestCommitTLSCompletion_ExistingReservationConfirmsAtLimit(t *testing.T) {
+	handler, db, userID, planID := setupQuotaCompletionTest(t)
+	setPlanLimit(t, db, planID, "endpoint_scan_limit", 1)
+
+	scanID := uuid.New()
+	endpoint := "https://reserved.example"
+	seedUsage(t, db, userID, scanID, domain.ScanUsageKindEndpoint)
+	if err := storage.NewTLSWriter(db).OnStarted(scanID, &userID, endpoint); err != nil {
+		t.Fatalf("OnStarted: %v", err)
+	}
+
+	result := tlsResult(endpoint)
+	acquired := commitTLS(t, handler, userID, scanID, endpoint, result)
+	if !acquired {
+		t.Fatal("existing TLS reservation must confirm the scan")
+	}
+	assertUsageCount(t, db, userID, domain.ScanUsageKindEndpoint, 1)
+	assertTLSStatus(t, db, scanID, scan.StateSUCCESS, "")
+}
+
+func TestCommitTLSCompletion_TwoCompletionsOneLedgerRow(t *testing.T) {
+	handler, db, userID, planID := setupQuotaCompletionTest(t)
+	setPlanLimit(t, db, planID, "endpoint_scan_limit", 1)
+
+	scanID := uuid.New()
+	endpoint := "https://twice.example"
+	if err := storage.NewTLSWriter(db).OnStarted(scanID, &userID, endpoint); err != nil {
+		t.Fatalf("OnStarted: %v", err)
+	}
+	result := tlsResult(endpoint)
+	if !commitTLS(t, handler, userID, scanID, endpoint, result) {
+		t.Fatal("first TLS completion must acquire the only credit")
+	}
+	if !commitTLS(t, handler, userID, scanID, endpoint, result) {
+		t.Fatal("second TLS completion must confirm the existing row")
+	}
+	assertUsageCount(t, db, userID, domain.ScanUsageKindEndpoint, 1)
+	assertTLSStatus(t, db, scanID, scan.StateSUCCESS, "")
+}
+
+func TestHandleTLSFailed_ReleasesReservation(t *testing.T) {
+	handler, db, userID, planID := setupQuotaCompletionTest(t)
+	setPlanLimit(t, db, planID, "endpoint_scan_limit", 1)
+	handler.redisCache = storage.NewRedisCache(&memRedis{values: map[string]string{}})
+
+	scanID := uuid.New()
+	endpoint := "https://failed.example"
+	seedUsage(t, db, userID, scanID, domain.ScanUsageKindEndpoint)
+	if err := storage.NewTLSWriter(db).OnStarted(scanID, &userID, endpoint); err != nil {
+		t.Fatalf("OnStarted: %v", err)
+	}
+
+	err := handler.HandleFailed(&nats.ScanFailedMessage{
+		ScanID: scanID, Kind: "tls", UserID: userID, Endpoint: endpoint, Error: "dial timeout",
+	})
+	if err != nil {
+		t.Fatalf("HandleFailed: %v", err)
+	}
+	assertUsageCount(t, db, userID, domain.ScanUsageKindEndpoint, 0)
+	assertTLSStatus(t, db, scanID, scan.StateFAILED, "dial timeout")
+}
+
+func setPlanLimit(t *testing.T, db *gorm.DB, planID uuid.UUID, column string, limit int) {
+	t.Helper()
+	if err := db.Model(&domain.Plan{}).Where("id = ?", planID).Update(column, limit).Error; err != nil {
+		t.Fatalf("set %s: %v", column, err)
+	}
+}
+
+func seedUsage(t *testing.T, db *gorm.DB, userID, scanID uuid.UUID, kind domain.ScanUsageKind) {
+	t.Helper()
+	if err := db.Create(&domain.ScanUsageEventEntity{
+		ID: uuid.New(), UserID: userID, ScanID: scanID, ScanKind: kind,
+	}).Error; err != nil {
+		t.Fatalf("seed ledger: %v", err)
+	}
+}
+
+func walletResult(address string, accountType domain.AccountType) *domain.ScanResult {
+	return &domain.ScanResult{
+		Address: address, Type: accountType,
+		Algorithm: domain.AlgorithmECDSAsecp256k1, NISTLevel: domain.NISTLevel1,
+		RiskScore: 1, Networks: []string{"ethereum"},
+	}
+}
+
+func tlsResult(url string) *domain.TLSScanResult {
+	return &domain.TLSScanResult{
+		URL: url, Host: "reserved.example", Port: 443,
+		ProtocolVersion: "TLS 1.3", NISTLevel: domain.NISTLevel1,
+		RiskScore: 1, PQCRisk: "high",
+	}
+}
+
+func commitWallet(t *testing.T, handler *ScanEventHandler, userID, scanID uuid.UUID, address string, result *domain.ScanResult) bool {
+	t.Helper()
+	msg := &nats.ScanCompletedMessage{
+		ScanID: scanID, Kind: "wallet", UserID: userID, Address: address, Result: result,
+	}
+	entity := domain.FromScanResult(userID, result)
+	entity.ID = scanID
+	acquired, err := handler.commitWalletCompletion(msg, entity, result)
+	if err != nil {
+		t.Fatalf("commitWalletCompletion: %v", err)
+	}
+	return acquired
+}
+
+func commitTLS(t *testing.T, handler *ScanEventHandler, userID, scanID uuid.UUID, endpoint string, result *domain.TLSScanResult) bool {
+	t.Helper()
+	msg := &nats.ScanCompletedMessage{
+		ScanID: scanID, Kind: "tls", UserID: userID, Endpoint: endpoint, Result: result,
+	}
+	user := &userID
+	entity := domain.FromTLSScanResult(user, result, false)
+	entity.ID = scanID
+	acquired, err := handler.commitTLSCompletion(msg, entity, result)
+	if err != nil {
+		t.Fatalf("commitTLSCompletion: %v", err)
+	}
+	return acquired
+}
+
+func assertUsageCount(t *testing.T, db *gorm.DB, userID uuid.UUID, kind domain.ScanUsageKind, want int64) {
+	t.Helper()
+	count, err := repository.NewScanUsageLedgerRepository(db).CountSuccessUsage(userID, kind)
+	if err != nil {
+		t.Fatalf("ledger count: %v", err)
+	}
+	if count != want {
+		t.Fatalf("ledger count: want %d, got %d", want, count)
+	}
+}
+
+func usageForScan(db *gorm.DB, scanID uuid.UUID) (domain.ScanUsageEventEntity, error) {
+	var row domain.ScanUsageEventEntity
+	err := db.Where("scan_id = ?", scanID).First(&row).Error
+	return row, err
+}
+
+func assertWalletStatus(t *testing.T, db *gorm.DB, scanID uuid.UUID, status, errMsg string) {
+	t.Helper()
+	var row domain.ScanResultEntity
+	if err := db.Where("id = ?", scanID).First(&row).Error; err != nil {
+		t.Fatalf("load wallet: %v", err)
+	}
+	if row.Status != status {
+		t.Fatalf("wallet status: want %s, got %s", status, row.Status)
+	}
+	if row.Error != errMsg {
+		t.Fatalf("wallet error: want %q, got %q", errMsg, row.Error)
+	}
+}
+
+func assertTLSStatus(t *testing.T, db *gorm.DB, scanID uuid.UUID, status, errMsg string) {
+	t.Helper()
+	var row domain.TLSScanResultEntity
+	if err := db.Where("id = ?", scanID).First(&row).Error; err != nil {
+		t.Fatalf("load tls: %v", err)
+	}
+	if row.Status != status {
+		t.Fatalf("tls status: want %s, got %s", status, row.Status)
+	}
+	if row.Error != errMsg {
+		t.Fatalf("tls error: want %q, got %q", errMsg, row.Error)
 	}
 }
