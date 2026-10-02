@@ -638,6 +638,7 @@ func walletScanRowJSON(e *domain.ScanResultEntity) map[string]any {
 		"is_erc4337":       e.IsERC4337,
 		"risk_score":       e.RiskScore,
 		"networks":         e.Networks,
+		"delegations":      e.Delegations,
 		"connections":      e.Connections,
 		"status":           e.Status,
 		"error":            e.Error,

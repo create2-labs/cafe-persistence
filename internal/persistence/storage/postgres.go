@@ -201,6 +201,7 @@ func (w *WalletWriter) OnPlanLimitExceededInTx(tx *gorm.DB, scanID, userID uuid.
 		"is_erc4337":       false,
 		"risk_score":       0,
 		"networks":         "",
+		"delegations":      "",
 		"connections":      "",
 		"updated_at":       time.Now(),
 	}

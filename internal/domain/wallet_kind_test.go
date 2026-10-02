@@ -6,11 +6,11 @@ func TestDeriveWalletTypeV1(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		name    string
-		typ     AccountType
-		isEOA   bool
-		is4337  bool
-		want    string
+		name   string
+		typ    AccountType
+		isEOA  bool
+		is4337 bool
+		want   string
 	}{
 		{name: "eoa from type", typ: AccountTypeEOA, isEOA: false, want: WalletTypeEOA},
 		{name: "eoa from flag", typ: "", isEOA: true, want: WalletTypeEOA},
@@ -46,6 +46,50 @@ func TestNormalizeWalletAccountKind_typeEOAWithFalseIsEOA(t *testing.T) {
 	}
 	if is4337 {
 		t.Fatal("is_erc4337 must be false for eoa")
+	}
+}
+
+func TestNormalizeWalletAccountKind_preservesUnknown(t *testing.T) {
+	t.Parallel()
+
+	typ, isEOA, is4337, walletType := NormalizeWalletAccountKind(AccountTypeUnknown, false, false)
+	if typ != AccountTypeUnknown {
+		t.Fatalf("type = %q, want %q", typ, AccountTypeUnknown)
+	}
+	if walletType != WalletTypeUnknown {
+		t.Fatalf("wallet_type = %q, want %q", walletType, WalletTypeUnknown)
+	}
+	if isEOA || is4337 {
+		t.Fatalf("is_eoa=%v is_erc4337=%v, want false, false", isEOA, is4337)
+	}
+}
+
+func TestNormalizeScanResultWalletKind_preservesUnknown(t *testing.T) {
+	t.Parallel()
+
+	result := &ScanResult{
+		Type:      AccountTypeUnknown,
+		IsEOA:     false,
+		IsERC4337: false,
+	}
+	NormalizeScanResultWalletKind(result)
+	if result.Type != AccountTypeUnknown || result.IsEOA || result.IsERC4337 {
+		t.Fatalf("normalized result = %+v", result)
+	}
+}
+
+func TestNormalizeScanResultWalletKind_legacyAA(t *testing.T) {
+	t.Parallel()
+
+	result := &ScanResult{
+		Type:      AccountTypeAA,
+		IsEOA:     false,
+		IsERC4337: true,
+		Algorithm: AlgorithmECDSAsecp256k1,
+	}
+	NormalizeScanResultWalletKind(result)
+	if result.Type != AccountTypeAA || result.IsEOA || !result.IsERC4337 {
+		t.Fatalf("normalized result = %+v", result)
 	}
 }
 

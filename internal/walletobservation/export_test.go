@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -163,6 +164,72 @@ func TestToWalletObservedEvent_emptyChainIDsUnknownNetwork(t *testing.T) {
 	}
 	if !ev.Payload.IsMultichain {
 		t.Fatal("expected multichain from multiple network names")
+	}
+}
+
+func TestToWalletObservedEvent_unknownWithoutAlgorithmIsNotPublishable(t *testing.T) {
+	t.Parallel()
+	scan := &domain.ScanResult{
+		Address:     "0xabc0000000000000000000000000000000000004",
+		Type:        domain.AccountTypeUnknown,
+		Algorithm:   "",
+		NISTLevel:   0,
+		IsEOA:       false,
+		Delegations: []domain.Delegation{},
+		Networks:    []string{},
+		ScannedAt:   time.Date(2026, 4, 17, 9, 0, 0, 0, time.UTC),
+	}
+	ev := ToWalletObservedEvent(ExportMeta{
+		EventID: "evt_unknown", CorrelationID: "c", CausationID: "a",
+	}, scan, testChainMap)
+	if ev.Payload.AccountKind != string(v01.AccountKindUnknown) {
+		t.Fatalf("account_kind: %q", ev.Payload.AccountKind)
+	}
+	if ev.Payload.CurrentAlgorithm != "" {
+		t.Fatalf("current_algorithm = %q, want empty", ev.Payload.CurrentAlgorithm)
+	}
+	if ev.Payload.CurrentPQPosture != string(v01.PQPostureUnknown) {
+		t.Fatalf("posture: %q, want unknown", ev.Payload.CurrentPQPosture)
+	}
+	if err := ev.Validate(); err == nil {
+		t.Fatal("empty current_algorithm must fail v0.1 validation")
+	}
+	out, err := json.Marshal(&ev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), "delegat") {
+		t.Fatalf("wallet.observed must not gain a delegation field: %s", out)
+	}
+}
+
+func TestToWalletObservedEvent_eoaKeepsSecp256k1(t *testing.T) {
+	t.Parallel()
+	scan := &domain.ScanResult{
+		Address:   "0xabc0000000000000000000000000000000000005",
+		Type:      domain.AccountTypeEOA,
+		Algorithm: domain.AlgorithmECDSAsecp256k1,
+		NISTLevel: domain.NISTLevel1,
+		IsEOA:     true,
+		Delegations: []domain.Delegation{{
+			ChainID:          1,
+			DelegatedAddress: "0x1111111111111111111111111111111111111111",
+		}},
+		Networks:  []string{"ethereum-mainnet"},
+		ScannedAt: time.Now().UTC(),
+	}
+	ev := ToWalletObservedEvent(ExportMeta{EventID: "e", CorrelationID: "c", CausationID: "a"}, scan, testChainMap)
+	if err := ev.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if ev.Payload.AccountKind != string(v01.AccountKindEOA) {
+		t.Fatalf("account_kind: %q", ev.Payload.AccountKind)
+	}
+	if ev.Payload.CurrentAlgorithm != string(v01.AlgorithmSecp256k1ECRecover) {
+		t.Fatalf("algorithm: %q", ev.Payload.CurrentAlgorithm)
+	}
+	if ev.Payload.CurrentPQPosture != string(v01.PQPostureClassicalOnly) {
+		t.Fatalf("posture: %q", ev.Payload.CurrentPQPosture)
 	}
 }
 

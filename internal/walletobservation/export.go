@@ -121,6 +121,9 @@ func mapAlgorithm(scan *domain.ScanResult) string {
 	switch scan.Algorithm {
 	case domain.AlgorithmECDSAsecp256k1:
 		return string(v01.AlgorithmSecp256k1ECRecover)
+	case "":
+		// No retained chain: do not invent secp256k1_ecrecover. v0.1 rejects an empty current_algorithm.
+		return ""
 	default:
 		// Discovery currently only emits ECDSA-secp256k1; keep export valid and explicit.
 		return string(v01.AlgorithmSecp256k1ECRecover)

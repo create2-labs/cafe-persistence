@@ -687,6 +687,9 @@ components:
         networks:
           type: string
           description: JSON-encoded string array stored in Postgres.
+        delegations:
+          type: string
+          description: JSON-encoded delegation array stored in Postgres.
         connections:
           type: string
           description: JSON-encoded string array stored in Postgres.

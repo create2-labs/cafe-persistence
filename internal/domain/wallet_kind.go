@@ -33,7 +33,7 @@ func NormalizeWalletAccountKind(t AccountType, isEOA, is4337 bool) (AccountType,
 	case WalletTypeEOA:
 		return AccountTypeEOA, true, false, WalletTypeEOA
 	default:
-		return "", false, false, WalletTypeUnknown
+		return AccountTypeUnknown, false, false, WalletTypeUnknown
 	}
 }
 

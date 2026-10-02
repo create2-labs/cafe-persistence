@@ -97,6 +97,32 @@ func TestScanV1OpenAPI_RequiredSchemasDocumented(t *testing.T) {
 	}
 }
 
+func TestScanV1OpenAPI_WalletScanRowDelegations(t *testing.T) {
+	spec := loadScanV1OpenAPISpec(t)
+	components := spec["components"].(map[string]any)
+	schemas := components["schemas"].(map[string]any)
+	row := schemas["WalletScanRow"].(map[string]any)
+	props := row["properties"].(map[string]any)
+
+	delegations, ok := props["delegations"].(map[string]any)
+	if !ok {
+		t.Fatal("WalletScanRow.delegations missing")
+	}
+	if delegations["type"] != "string" {
+		t.Fatalf("delegations type = %#v, want string", delegations["type"])
+	}
+	if delegations["description"] != "JSON-encoded delegation array stored in Postgres." {
+		t.Fatalf("delegations description = %#v", delegations["description"])
+	}
+	erc4337, ok := props["is_erc4337"].(map[string]any)
+	if !ok {
+		t.Fatal("WalletScanRow.is_erc4337 must remain")
+	}
+	if erc4337["type"] != "boolean" {
+		t.Fatalf("is_erc4337 type = %#v, want boolean", erc4337["type"])
+	}
+}
+
 func TestScanV1OpenAPI_PendingOperations(t *testing.T) {
 	spec := loadScanV1OpenAPISpec(t)
 	paths := spec["paths"].(map[string]any)
