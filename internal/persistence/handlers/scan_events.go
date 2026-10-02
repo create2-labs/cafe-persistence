@@ -285,16 +285,9 @@ func (h *ScanEventHandler) commitWalletCompletion(
 	}
 
 	err = h.db.Transaction(func(tx *gorm.DB) error {
-		if unlimited {
-			if err := h.ledger.RecordSuccessUsageInTx(tx, msg.UserID, msg.ScanID, domain.ScanUsageKindWallet); err != nil {
-				return err
-			}
-			acquired = true
-			return h.walletWriter.OnCompletedInTx(tx, msg.ScanID, entity)
-		}
 		var slotErr error
-		acquired, slotErr = h.ledger.RecordSuccessUsageIfUnderLimitInTx(
-			tx, msg.UserID, msg.ScanID, domain.ScanUsageKindWallet, limit,
+		acquired, slotErr = h.confirmExistingUsageOrAcquire(
+			tx, msg.UserID, msg.ScanID, domain.ScanUsageKindWallet, limit, unlimited,
 		)
 		if slotErr != nil {
 			return slotErr
@@ -338,16 +331,9 @@ func (h *ScanEventHandler) commitTLSCompletion(
 	}
 
 	err = h.db.Transaction(func(tx *gorm.DB) error {
-		if unlimited {
-			if err := h.ledger.RecordSuccessUsageInTx(tx, msg.UserID, msg.ScanID, domain.ScanUsageKindEndpoint); err != nil {
-				return err
-			}
-			acquired = true
-			return h.tlsWriter.OnCompletedInTx(tx, msg.ScanID, entity)
-		}
 		var slotErr error
-		acquired, slotErr = h.ledger.RecordSuccessUsageIfUnderLimitInTx(
-			tx, msg.UserID, msg.ScanID, domain.ScanUsageKindEndpoint, limit,
+		acquired, slotErr = h.confirmExistingUsageOrAcquire(
+			tx, msg.UserID, msg.ScanID, domain.ScanUsageKindEndpoint, limit, unlimited,
 		)
 		if slotErr != nil {
 			return slotErr
@@ -358,6 +344,41 @@ func (h *ScanEventHandler) commitTLSCompletion(
 		return h.tlsWriter.OnPlanLimitExceededInTx(tx, msg.ScanID, userID, url)
 	})
 	return acquired, err
+}
+
+// confirmExistingUsageOrAcquire keeps a ledger row that already belongs to this scan_id.
+// That row is the reservation (or a previous completion). It confirms the scan and does not
+// take another credit. A missing row is acquired under the plan limit.
+func (h *ScanEventHandler) confirmExistingUsageOrAcquire(
+	tx *gorm.DB,
+	userID, scanID uuid.UUID,
+	kind domain.ScanUsageKind,
+	limit int,
+	unlimited bool,
+) (bool, error) {
+	reserved, err := h.ledger.HasSuccessUsageForScanInTx(tx, scanID)
+	if err != nil {
+		return false, err
+	}
+	if reserved {
+		return true, nil
+	}
+	if unlimited {
+		if err := h.ledger.RecordSuccessUsageInTx(tx, userID, scanID, kind); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	acquired, err := h.ledger.RecordSuccessUsageIfUnderLimitInTx(tx, userID, scanID, kind, limit)
+	if err != nil || acquired {
+		return acquired, err
+	}
+	// A concurrent completion of this same scan_id may have inserted the row after the first read.
+	reserved, err = h.ledger.HasSuccessUsageForScanInTx(tx, scanID)
+	if err != nil {
+		return false, err
+	}
+	return reserved, nil
 }
 
 const subjectScanFailed = "scan.failed"
@@ -408,7 +429,7 @@ func (h *ScanEventHandler) handleTLSFailed(ctx context.Context, msg *nats.ScanFa
 	if msg.UserID != uuid.Nil {
 		userID = &msg.UserID
 	}
-	if err := h.tlsWriter.OnFailed(msg.ScanID, userID, msg.Endpoint, msg.Error); err != nil {
+	if err := h.persistTLSFailure(msg.ScanID, userID, msg.Endpoint, msg.Error); err != nil {
 		log.Error().Err(err).Str("scan_id", msg.ScanID.String()).Msg("persistence: OnFailed TLS failed")
 		return err
 	}
@@ -440,7 +461,7 @@ func (h *ScanEventHandler) handleWalletFailed(ctx context.Context, msg *nats.Sca
 			Msg("persistence: invalid transition, ignoring")
 		return nil
 	}
-	if err := h.walletWriter.OnFailed(msg.ScanID, msg.UserID, msg.Address, msg.Error); err != nil {
+	if err := h.persistWalletFailure(msg.ScanID, msg.UserID, msg.Address, msg.Error); err != nil {
 		log.Error().Err(err).Str("scan_id", msg.ScanID.String()).Msg("persistence: OnFailed wallet failed")
 		return err
 	}
@@ -450,6 +471,30 @@ func (h *ScanEventHandler) handleWalletFailed(ctx context.Context, msg *nats.Sca
 	}
 	h.publishScanReady(msg.UserID, "wallet", "", msg.Address, "failed")
 	return nil
+}
+
+func (h *ScanEventHandler) persistWalletFailure(scanID, userID uuid.UUID, address, errMsg string) error {
+	if h.db == nil || h.ledger == nil {
+		return h.walletWriter.OnFailed(scanID, userID, address, errMsg)
+	}
+	return h.db.Transaction(func(tx *gorm.DB) error {
+		if err := h.walletWriter.OnFailedInTx(tx, scanID, userID, address, errMsg); err != nil {
+			return err
+		}
+		return h.ledger.ReleaseSuccessUsageByScanIDInTx(tx, scanID)
+	})
+}
+
+func (h *ScanEventHandler) persistTLSFailure(scanID uuid.UUID, userID *uuid.UUID, url, errMsg string) error {
+	if h.db == nil || h.ledger == nil {
+		return h.tlsWriter.OnFailed(scanID, userID, url, errMsg)
+	}
+	return h.db.Transaction(func(tx *gorm.DB) error {
+		if err := h.tlsWriter.OnFailedInTx(tx, scanID, userID, url, errMsg); err != nil {
+			return err
+		}
+		return h.ledger.ReleaseSuccessUsageByScanIDInTx(tx, scanID)
+	})
 }
 
 func (h *ScanEventHandler) publishScanReady(userID uuid.UUID, kind, endpoint, address, status string) {

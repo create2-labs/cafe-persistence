@@ -27,6 +27,10 @@ type ScanUsageLedgerRepository interface {
 	TryAcquireSuccessSlotInTx(tx *gorm.DB, userID uuid.UUID, kind domain.ScanUsageKind, limit int) (bool, error)
 	// RecordSuccessUsageIfUnderLimitInTx atomically inserts when ledger count < limit (portable).
 	RecordSuccessUsageIfUnderLimitInTx(tx *gorm.DB, userID, scanID uuid.UUID, kind domain.ScanUsageKind, limit int) (bool, error)
+	// HasSuccessUsageForScanInTx reports whether this scan_id already has a ledger row.
+	HasSuccessUsageForScanInTx(tx *gorm.DB, scanID uuid.UUID) (bool, error)
+	// ReleaseSuccessUsageByScanIDInTx deletes the ledger row when a scan ends without a result.
+	ReleaseSuccessUsageByScanIDInTx(tx *gorm.DB, scanID uuid.UUID) error
 }
 
 type scanUsageLedgerRepository struct {
@@ -176,6 +180,18 @@ ON CONFLICT (scan_id) DO NOTHING`,
 		return false, res.Error
 	}
 	return res.RowsAffected > 0, nil
+}
+
+func (r *scanUsageLedgerRepository) HasSuccessUsageForScanInTx(tx *gorm.DB, scanID uuid.UUID) (bool, error) {
+	var count int64
+	err := tx.Model(&domain.ScanUsageEventEntity{}).
+		Where("scan_id = ?", scanID).
+		Count(&count).Error
+	return count > 0, err
+}
+
+func (r *scanUsageLedgerRepository) ReleaseSuccessUsageByScanIDInTx(tx *gorm.DB, scanID uuid.UUID) error {
+	return tx.Where("scan_id = ?", scanID).Delete(&domain.ScanUsageEventEntity{}).Error
 }
 
 var errInvalidScanUsageKind = errors.New("invalid scan usage kind")
