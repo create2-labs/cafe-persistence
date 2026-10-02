@@ -36,6 +36,7 @@ func (w *TLSWriter) GetStatus(scanID uuid.UUID) (string, error) {
 // OnStarted inserts a lifecycle-only row for scan_id (internal status RUNNING; API maps to started).
 // Crypto posture fields are filled only on scan.completed (IMM-D1).
 // Idempotent for the same scan_id: no downgrade from terminal; duplicate start is a no-op.
+// A default scan (nil user) replaces every previous nil-user row for the same URL.
 func (w *TLSWriter) OnStarted(scanID uuid.UUID, userID *uuid.UUID, url string) error {
 	current, err := w.GetStatus(scanID)
 	if err != nil {
@@ -44,10 +45,38 @@ func (w *TLSWriter) OnStarted(scanID uuid.UUID, userID *uuid.UUID, url string) e
 	if current != "" {
 		return nil
 	}
+	if userID == nil {
+		replaced, err := w.defaultAlreadyReplaced(scanID)
+		if err != nil || replaced {
+			return err
+		}
+	}
 	ent := &domain.TLSScanResultEntity{
 		ID: scanID, UserID: userID, URL: url, Status: scan.StateRUNNING,
+		Default: userID == nil,
 	}
-	return w.db.Create(ent).Error
+	if err := w.db.Create(ent).Error; err != nil {
+		return err
+	}
+	if userID == nil {
+		return w.replacePreviousDefault(scanID, url)
+	}
+	return nil
+}
+
+func (w *TLSWriter) defaultAlreadyReplaced(scanID uuid.UUID) (bool, error) {
+	var n int64
+	err := w.db.Unscoped().Model(&domain.TLSScanResultEntity{}).
+		Where("id = ? AND deleted_at IS NOT NULL", scanID).
+		Count(&n).Error
+	return n > 0, err
+}
+
+// replacePreviousDefault drops earlier catalog rows for this URL.
+// User-owned scans keep their user_id and are left in place.
+func (w *TLSWriter) replacePreviousDefault(scanID uuid.UUID, url string) error {
+	return w.db.Where("user_id IS NULL AND url = ? AND id <> ?", url, scanID).
+		Delete(&domain.TLSScanResultEntity{}).Error
 }
 
 // OnCompleted updates the row by scan_id; inserts on replay when the row is missing.

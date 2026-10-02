@@ -274,3 +274,80 @@ func TestTLSWriter_OnCompletedPreservesCreatedAt(t *testing.T) {
 		t.Fatal("TLS created_at was reset to zero after completion")
 	}
 }
+
+func TestTLSWriter_DefaultRescanReplacesNilUserRows(t *testing.T) {
+	w := setupTLSWriterTestDB(t)
+	url := "https://nginx"
+	otherURL := "https://other.example"
+	oldID := uuid.New()
+	failedID := uuid.New()
+	otherID := uuid.New()
+	userID := uuid.New()
+	userScanID := uuid.New()
+	newID := uuid.New()
+
+	seed := []domain.TLSScanResultEntity{
+		{ID: oldID, URL: url, Default: true, Status: scan.StateSUCCESS, Host: "nginx", ProtocolVersion: "TLS 1.3", PQCRisk: "low"},
+		{ID: failedID, URL: url, Default: false, Status: scan.StateFAILED, Host: "nginx", ProtocolVersion: "unknown", PQCRisk: "unknown"},
+		{ID: otherID, URL: otherURL, Default: true, Status: scan.StateSUCCESS, Host: "other", ProtocolVersion: "TLS 1.3", PQCRisk: "low"},
+		{ID: userScanID, UserID: &userID, URL: url, Default: false, Status: scan.StateSUCCESS, Host: "nginx", ProtocolVersion: "TLS 1.3", PQCRisk: "low"},
+	}
+	for i := range seed {
+		if err := w.db.Create(&seed[i]).Error; err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
+
+	if err := w.OnStarted(newID, nil, url); err != nil {
+		t.Fatalf("OnStarted: %v", err)
+	}
+
+	var live []domain.TLSScanResultEntity
+	if err := w.db.Where("url = ?", url).Order("id").Find(&live).Error; err != nil {
+		t.Fatalf("live rows: %v", err)
+	}
+	if len(live) != 2 {
+		t.Fatalf("want the new default row and the user row, got %d", len(live))
+	}
+	var replaced domain.TLSScanResultEntity
+	if err := w.db.Where("id = ?", newID).First(&replaced).Error; err != nil {
+		t.Fatalf("replacement: %v", err)
+	}
+	if !replaced.Default || replaced.Status != scan.StateRUNNING || replaced.UserID != nil {
+		t.Fatalf("replacement default=%v status=%s user=%v", replaced.Default, replaced.Status, replaced.UserID)
+	}
+	if err := w.db.Where("id = ?", otherID).First(&domain.TLSScanResultEntity{}).Error; err != nil {
+		t.Fatalf("other default URL was removed: %v", err)
+	}
+	if err := w.db.Where("id = ?", userScanID).First(&domain.TLSScanResultEntity{}).Error; err != nil {
+		t.Fatalf("user scan was removed: %v", err)
+	}
+	var gone int64
+	if err := w.db.Unscoped().Model(&domain.TLSScanResultEntity{}).Where("id IN ? AND deleted_at IS NOT NULL", []uuid.UUID{oldID, failedID}).Count(&gone).Error; err != nil {
+		t.Fatalf("count replaced: %v", err)
+	}
+	if gone != 2 {
+		t.Fatalf("soft-deleted %d previous nil-user rows, want 2", gone)
+	}
+
+	if err := w.OnStarted(newID, nil, url); err != nil {
+		t.Fatalf("redelivered OnStarted: %v", err)
+	}
+	if err := w.db.Where("id = ?", newID).First(&replaced).Error; err != nil {
+		t.Fatalf("replacement removed on redelivery: %v", err)
+	}
+
+	if err := w.OnStarted(oldID, nil, url); err != nil {
+		t.Fatalf("replaced scan OnStarted: %v", err)
+	}
+	if err := w.db.Where("id = ?", newID).First(&replaced).Error; err != nil {
+		t.Fatalf("newer default removed by the replaced scan: %v", err)
+	}
+	var resurrected int64
+	if err := w.db.Model(&domain.TLSScanResultEntity{}).Where("id = ?", oldID).Count(&resurrected).Error; err != nil {
+		t.Fatalf("count resurrected: %v", err)
+	}
+	if resurrected != 0 {
+		t.Fatalf("replaced scan was resurrected")
+	}
+}
