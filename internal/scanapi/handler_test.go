@@ -270,6 +270,43 @@ func TestScanAPI_GetWalletScan_OK(t *testing.T) {
 	}
 }
 
+func TestScanAPI_GetWalletScan_PublicKeyRecovery(t *testing.T) {
+	db := setupScanAPITestDB(t)
+	userID := uuid.New()
+	scanID := uuid.New()
+	row := domain.ScanResultEntity{
+		ID: scanID, UserID: userID, Address: "0xabc", Status: scan.StateSUCCESS,
+		Type: domain.AccountTypeEOA, Algorithm: domain.AlgorithmECDSAsecp256k1, NISTLevel: domain.NISTLevel1,
+		PublicKeyRecovery: domain.PublicKeyRecoveryNotRequired,
+	}
+	if err := db.Create(&row).Error; err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	ts := newTestScanAPIServer(t, newMemoryPendingRepo(), db)
+	defer ts.Close()
+
+	url := ts.URL + scanroutes.Join(scanroutes.WalletScanByID)
+	url = strings.Replace(url, "{scan_id}", scanID.String(), 1)
+	resp := doAuthRequest(t, http.MethodGet, url, userID, nil)
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body["public_key_recovery"] != string(domain.PublicKeyRecoveryNotRequired) {
+		t.Fatalf("public_key_recovery = %#v", body["public_key_recovery"])
+	}
+	if _, ok := body["first_seen"]; ok {
+		t.Fatalf("first_seen = %#v", body["first_seen"])
+	}
+	if _, ok := body["last_seen"]; ok {
+		t.Fatalf("last_seen = %#v", body["last_seen"])
+	}
+}
+
 func TestScanAPI_GetWalletScan_DelegationsAndUnknown(t *testing.T) {
 	db := setupScanAPITestDB(t)
 	userID := uuid.New()

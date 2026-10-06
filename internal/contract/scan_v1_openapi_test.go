@@ -123,6 +123,41 @@ func TestScanV1OpenAPI_WalletScanRowDelegations(t *testing.T) {
 	}
 }
 
+func TestScanV1OpenAPI_WalletScanRowPublicKeyRecovery(t *testing.T) {
+	spec := loadScanV1OpenAPISpec(t)
+	components := spec["components"].(map[string]any)
+	schemas := components["schemas"].(map[string]any)
+	row := schemas["WalletScanRow"].(map[string]any)
+	props := row["properties"].(map[string]any)
+
+	if _, ok := props["first_seen"]; ok {
+		t.Fatal("WalletScanRow.first_seen must be absent")
+	}
+	if _, ok := props["last_seen"]; ok {
+		t.Fatal("WalletScanRow.last_seen must be absent")
+	}
+	recovery, ok := props["public_key_recovery"].(map[string]any)
+	if !ok {
+		t.Fatal("WalletScanRow.public_key_recovery missing")
+	}
+	if recovery["type"] != "string" {
+		t.Fatalf("public_key_recovery type = %#v, want string", recovery["type"])
+	}
+	enumVals, ok := recovery["enum"].([]any)
+	if !ok {
+		t.Fatal("public_key_recovery.enum missing")
+	}
+	have := make(map[string]bool, len(enumVals))
+	for _, v := range enumVals {
+		have[v.(string)] = true
+	}
+	for _, expected := range []string{"", "not_required", "recovered", "unresolved"} {
+		if !have[expected] {
+			t.Fatalf("public_key_recovery missing %q", expected)
+		}
+	}
+}
+
 func TestScanV1OpenAPI_PendingOperations(t *testing.T) {
 	spec := loadScanV1OpenAPISpec(t)
 	paths := spec["paths"].(map[string]any)

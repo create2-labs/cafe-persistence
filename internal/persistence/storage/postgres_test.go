@@ -105,6 +105,36 @@ func TestWalletWriter_TwoScanIDsSameAddressPreservesTerminalA(t *testing.T) {
 	}
 }
 
+func TestWalletWriter_OnCompleted_StoresPublicKeyRecovery(t *testing.T) {
+	w := setupWalletWriterTestDB(t)
+	userID := uuid.New()
+	scanID := uuid.New()
+	address := "0xrecover"
+
+	if err := w.OnStarted(scanID, userID, address); err != nil {
+		t.Fatalf("OnStarted: %v", err)
+	}
+	entity := domain.FromScanResult(userID, &domain.ScanResult{
+		Address:           address,
+		Type:              domain.AccountTypeEOA,
+		PublicKeyRecovery: domain.PublicKeyRecoveryUnresolved,
+	})
+	if err := w.OnCompleted(scanID, entity); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+
+	var stored domain.ScanResultEntity
+	if err := w.db.Where("id = ?", scanID).First(&stored).Error; err != nil {
+		t.Fatalf("load row: %v", err)
+	}
+	if stored.PublicKeyRecovery != domain.PublicKeyRecoveryUnresolved {
+		t.Fatalf("public_key_recovery = %q", stored.PublicKeyRecovery)
+	}
+	if got := stored.ToScanResult().PublicKeyRecovery; got != domain.PublicKeyRecoveryUnresolved {
+		t.Fatalf("dto public_key_recovery = %q", got)
+	}
+}
+
 func TestWalletWriter_OnStartedIdempotentByScanID(t *testing.T) {
 	w := setupWalletWriterTestDB(t)
 	userID := uuid.New()
@@ -167,6 +197,9 @@ func TestWalletWriter_OnStartedInsertsLifecycleFieldsOnly(t *testing.T) {
 	}
 	if stored.Networks != "" {
 		t.Fatalf("networks = %q, want empty before scan.completed", stored.Networks)
+	}
+	if stored.PublicKeyRecovery != "" {
+		t.Fatalf("public_key_recovery = %q, want empty before scan.completed", stored.PublicKeyRecovery)
 	}
 }
 

@@ -55,6 +55,47 @@ func TestMigrateScanSchema_matchesGoldenIndexes(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Fatalf("index snapshot mismatch:\n  got:  %v\n  want: %v", got, want)
 	}
+	assertWalletRecoveryColumns(t, db)
+}
+
+func assertWalletRecoveryColumns(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	type row struct {
+		ColumnName string
+	}
+	var rows []row
+	err := db.Raw(`
+SELECT column_name
+FROM information_schema.columns
+WHERE table_schema = 'public'
+  AND table_name = 'scan_results'
+  AND column_name IN ('first_seen', 'last_seen', 'public_key_recovery')
+ORDER BY column_name`).Scan(&rows).Error
+	if err != nil {
+		t.Fatalf("list columns: %v", err)
+	}
+	names := make([]string, 0, len(rows))
+	for _, r := range rows {
+		names = append(names, r.ColumnName)
+	}
+	if slices.Contains(names, "first_seen") || slices.Contains(names, "last_seen") {
+		t.Fatalf("activity date columns must be absent, got %v", names)
+	}
+	if !slices.Contains(names, "public_key_recovery") {
+		t.Fatalf("public_key_recovery missing, got %v", names)
+	}
+
+	var constraints []string
+	err = db.Raw(`
+SELECT conname
+FROM pg_constraint
+WHERE conname = 'chk_scan_results_public_key_recovery'`).Scan(&constraints).Error
+	if err != nil {
+		t.Fatalf("list constraint: %v", err)
+	}
+	if len(constraints) != 1 {
+		t.Fatalf("public_key_recovery check constraint missing, got %v", constraints)
+	}
 }
 
 func listPublicIndexes(db *gorm.DB, tables []string) ([]string, error) {
