@@ -23,7 +23,8 @@ func TestWalletWriter_OnPlanLimitExceededInTx_StripsResult(t *testing.T) {
 		Address: address, Type: domain.AccountTypeEOA,
 		Algorithm: domain.AlgorithmECDSAsecp256k1, NISTLevel: domain.NISTLevel1,
 		KeyExposed: true, PublicKey: "0xdeadbeef", RiskScore: 9.9,
-		Networks: []string{"ethereum"}, Connections: []string{"peer"},
+		PublicKeyRecovery: domain.PublicKeyRecoveryRecovered,
+		Networks:          []string{"ethereum"}, Connections: []string{"peer"},
 	})
 	if err := w.OnCompletedInTx(w.db, scanID, rich); err != nil {
 		t.Fatalf("OnCompletedInTx: %v", err)
@@ -123,6 +124,9 @@ func assertWalletPlanLimitStubNoCryptoPosture(t *testing.T, stored domain.ScanRe
 	}
 	if stored.PublicKey != "" {
 		t.Fatalf("public_key must be empty, got %q", stored.PublicKey)
+	}
+	if stored.PublicKeyRecovery != "" {
+		t.Fatalf("public_key_recovery must be empty, got %q", stored.PublicKeyRecovery)
 	}
 	if stored.IsEOA {
 		t.Fatal("is_eoa must be false on plan limit stub")

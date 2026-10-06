@@ -677,6 +677,12 @@ components:
           type: string
         exposed_network:
           type: string
+        public_key_recovery:
+          type: string
+          enum: ["", "not_required", "recovered", "unresolved"]
+          description: |
+            ECDSA public-key recovery outcome stored with the wallet scan.
+            Empty until the scan completes; otherwise not_required, recovered, or unresolved.
         is_eoa:
           type: boolean
         is_erc4337:

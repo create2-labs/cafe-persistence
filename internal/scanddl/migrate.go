@@ -20,6 +20,15 @@ var scanIndexDDL = []string{
 	`ALTER TABLE tls_scan_results ALTER COLUMN status DROP DEFAULT`,
 }
 
+// walletResultDDL removes activity dates from scan_results and constrains
+// public_key_recovery. Previous first_seen/last_seen values are not translated.
+var walletResultDDL = []string{
+	`ALTER TABLE scan_results DROP COLUMN IF EXISTS first_seen`,
+	`ALTER TABLE scan_results DROP COLUMN IF EXISTS last_seen`,
+	`ALTER TABLE scan_results DROP CONSTRAINT IF EXISTS chk_scan_results_public_key_recovery`,
+	`ALTER TABLE scan_results ADD CONSTRAINT chk_scan_results_public_key_recovery CHECK (public_key_recovery IN ('', 'not_required', 'recovered', 'unresolved'))`,
+}
+
 // RequiredIndexNames are the IMM list/history indexes applied at persistence boot (ADR §14.5).
 var RequiredIndexNames = []string{
 	"idx_scan_results_user_address_created_at",
@@ -50,6 +59,11 @@ func MigrateScanSchema(db *gorm.DB) error {
 		return fmt.Errorf("scan tables AutoMigrate: %w", err)
 	}
 	for _, q := range scanIndexDDL {
+		if err := db.Exec(q).Error; err != nil {
+			return fmt.Errorf("scan DDL %q: %w", q, err)
+		}
+	}
+	for _, q := range walletResultDDL {
 		if err := db.Exec(q).Error; err != nil {
 			return fmt.Errorf("scan DDL %q: %w", q, err)
 		}
