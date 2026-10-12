@@ -1,12 +1,12 @@
 ##############################
 # Stage CI — Lint / Test / Vuln (use: docker build --target ci)
 ##############################
-FROM golang:1.26.9 AS ci
+FROM golang:1.27.2 AS ci
 
 WORKDIR /app
 
 # Cache-bust: force reinstall of tools when Go version changes (must match image tag)
-ENV GO_TOOLING_VERSION=1.26.9
+ENV GO_TOOLING_VERSION=1.27.2
 ENV PATH=/go/bin:/usr/local/go/bin:/usr/local/bin:$PATH
 
 COPY go.mod go.sum ./
@@ -15,7 +15,7 @@ RUN go mod download
 COPY . .
 
 RUN go install golang.org/x/vuln/cmd/govulncheck@latest \
-    && go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.8.0
+    && go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0
 
 CMD ["sh", "-c", "go mod download && golangci-lint run ./... && go test ./... && govulncheck ./..."]
 
@@ -23,7 +23,7 @@ CMD ["sh", "-c", "go mod download && golangci-lint run ./... && go test ./... &&
 ##############################
 # Stage Build
 ##############################
-FROM golang:1.26.9-bookworm AS builder
+FROM golang:1.27.2-bookworm AS builder
 
 ENV CGO_ENABLED=0
 
