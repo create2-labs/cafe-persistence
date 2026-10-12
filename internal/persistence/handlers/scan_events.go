@@ -13,6 +13,7 @@ import (
 	"cafe-persistence/pkg/nats"
 	"cafe-persistence/pkg/scan"
 
+	"github.com/create2-labs/cafe-contracts/cafenatsv01"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
@@ -237,12 +238,12 @@ func (h *ScanEventHandler) publishWalletObserved(msg *nats.ScanCompletedMessage,
 		log.Error().Err(err).Str("scan_id", msg.ScanID.String()).Msg("persistence: wallet.observed export validation failed")
 		return
 	}
-	if err := nats.PublishJSON(h.natsConn, nats.SubjectDiscoveryWalletObserved, &ev); err != nil {
-		log.Error().Err(err).Str("subject", nats.SubjectDiscoveryWalletObserved).Msg("persistence: wallet.observed publish failed")
+	if err := nats.PublishJSON(h.natsConn, cafenatsv01.NATSSubjectDiscoveryWalletObservedV01, &ev); err != nil {
+		log.Error().Err(err).Str("subject", cafenatsv01.NATSSubjectDiscoveryWalletObservedV01).Msg("persistence: wallet.observed publish failed")
 		return
 	}
 	log.Info().
-		Str("subject", nats.SubjectDiscoveryWalletObserved).
+		Str("subject", cafenatsv01.NATSSubjectDiscoveryWalletObservedV01).
 		Str("scan_id", msg.ScanID.String()).
 		Str("event_id", ev.EventID).
 		Msg("NATS → PUB cafe.discovery.wallet.observed v0.1")

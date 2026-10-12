@@ -11,6 +11,7 @@ import (
 	"cafe-persistence/pkg/nats"
 	redisconn "cafe-persistence/pkg/redis"
 
+	"github.com/create2-labs/cafe-contracts/cafenatsv01"
 	"github.com/google/uuid"
 	natslib "github.com/nats-io/nats.go"
 	goredis "github.com/redis/go-redis/v9"
@@ -177,7 +178,7 @@ func TestHandleWalletCompleted_MissingDelegationsUnknownSkipsObserved(t *testing
 	if cached.Type != domain.AccountTypeUnknown {
 		t.Fatalf("redis type = %q", cached.Type)
 	}
-	if publishedSubjects(bus, nats.SubjectDiscoveryWalletObserved) != 0 {
+	if publishedSubjects(bus, cafenatsv01.NATSSubjectDiscoveryWalletObservedV01) != 0 {
 		t.Fatalf("wallet.observed published: %v", bus.subjects)
 	}
 	if publishedSubjects(bus, nats.SubjectScanReady) != 1 {
@@ -235,7 +236,7 @@ func TestHandleWalletCompleted_DelegationsRoundTripAndEOAObserved(t *testing.T) 
 		t.Fatalf("redis delegations = %#v", cached.Delegations)
 	}
 
-	if publishedSubjects(bus, nats.SubjectDiscoveryWalletObserved) != 1 {
+	if publishedSubjects(bus, cafenatsv01.NATSSubjectDiscoveryWalletObservedV01) != 1 {
 		t.Fatalf("subjects=%v", bus.subjects)
 	}
 	var ev struct {
@@ -246,7 +247,7 @@ func TestHandleWalletCompleted_DelegationsRoundTripAndEOAObserved(t *testing.T) 
 	}
 	var observed []byte
 	for i, subject := range bus.subjects {
-		if subject == nats.SubjectDiscoveryWalletObserved {
+		if subject == cafenatsv01.NATSSubjectDiscoveryWalletObservedV01 {
 			observed = bus.payloads[i]
 		}
 	}
@@ -297,7 +298,7 @@ func TestHandleWalletCompleted_LegacyAAStillDecoded(t *testing.T) {
 	if stored.Delegations != "[]" {
 		t.Fatalf("delegations = %q", stored.Delegations)
 	}
-	if publishedSubjects(bus, nats.SubjectDiscoveryWalletObserved) != 1 {
+	if publishedSubjects(bus, cafenatsv01.NATSSubjectDiscoveryWalletObservedV01) != 1 {
 		t.Fatalf("legacy AA must still publish wallet.observed, subjects=%v", bus.subjects)
 	}
 }
