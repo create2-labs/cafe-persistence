@@ -17,19 +17,6 @@ type TLSScanMessage struct {
 	IsDefault bool      `json:"is_default"`  // true when scanning default endpoints at startup
 }
 
-// ScannerPresenceEvent is the event type for scanner presence messages.
-const (
-	ScannerPresenceJoined = "joined"
-	ScannerPresenceLeft   = "left"
-)
-
-// ScannerPresenceMessage is published by scanners on start (joined), periodically (joined heartbeat), and on shutdown (left).
-type ScannerPresenceMessage struct {
-	Event     string `json:"event"`     // "joined" or "left"
-	ScannerID string `json:"scanner_id"`
-	Type      string `json:"type"`      // "tls" or "wallet"
-}
-
 // ScanStartedMessage is published by scanners when a scan begins (consumed by persistence-service).
 type ScanStartedMessage struct {
 	ScanID    uuid.UUID `json:"scan_id"`
