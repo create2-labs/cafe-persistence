@@ -14,7 +14,8 @@ func main() {
 	}
 
 	client := &http.Client{Timeout: 4 * time.Second}
-	resp, err := client.Get("http://127.0.0.1:" + port + "/ready")
+	// G704: the host is loopback; the port comes from PERSISTENCE_HEALTH_PORT.
+	resp, err := client.Get("http://127.0.0.1:" + port + "/ready") // #nosec G704
 	if err != nil {
 		os.Exit(1)
 	}
