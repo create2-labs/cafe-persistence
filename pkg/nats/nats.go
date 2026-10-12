@@ -94,7 +94,6 @@ func PublishJSON(conn Connection, subject string, payload interface{}) error {
 const (
 	SubjectWalletScan      = "cafe.discovery.wallet.scan"
 	SubjectTLSScan         = "cafe.discovery.tls.scan"
-	SubjectScannerPresence = "cafe.discovery.scanners.presence"
 	QueueScanners          = "cafe.scanners"
 
 	// Event subjects for persistence service (scan lifecycle)
