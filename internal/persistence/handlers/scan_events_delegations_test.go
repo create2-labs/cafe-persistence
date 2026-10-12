@@ -12,6 +12,7 @@ import (
 	redisconn "cafe-persistence/pkg/redis"
 
 	"github.com/create2-labs/cafe-contracts/cafenatsv01"
+	lifecycle "github.com/create2-labs/cafe-contracts/discovery/scanlifecycle/v1"
 	"github.com/google/uuid"
 	natslib "github.com/nats-io/nats.go"
 	goredis "github.com/redis/go-redis/v9"
@@ -129,7 +130,7 @@ func TestHandleWalletCompleted_MissingDelegationsUnknownSkipsObserved(t *testing
 		t.Fatalf("OnStarted: %v", err)
 	}
 
-	err := h.HandleCompleted(&nats.ScanCompletedMessage{
+	err := h.applyCompleted(&scanCompleted{
 		ScanID:  scanID,
 		Kind:    "wallet",
 		UserID:  userID,
@@ -147,7 +148,7 @@ func TestHandleWalletCompleted_MissingDelegationsUnknownSkipsObserved(t *testing
 		},
 	})
 	if err != nil {
-		t.Fatalf("HandleCompleted: %v", err)
+		t.Fatalf("applyCompleted: %v", err)
 	}
 
 	var stored domain.ScanResultEntity
@@ -181,8 +182,21 @@ func TestHandleWalletCompleted_MissingDelegationsUnknownSkipsObserved(t *testing
 	if publishedSubjects(bus, cafenatsv01.NATSSubjectDiscoveryWalletObservedV01) != 0 {
 		t.Fatalf("wallet.observed published: %v", bus.subjects)
 	}
-	if publishedSubjects(bus, nats.SubjectScanReady) != 1 {
+	if publishedSubjects(bus, lifecycle.SubjectScanReady) != 1 {
 		t.Fatalf("scan.ready count, subjects=%v", bus.subjects)
+	}
+	var readyBody []byte
+	for i, subject := range bus.subjects {
+		if subject == lifecycle.SubjectScanReady {
+			readyBody = bus.payloads[i]
+		}
+	}
+	ready, err := lifecycle.DecodeReady(readyBody)
+	if err != nil {
+		t.Fatalf("scan.ready: %v", err)
+	}
+	if ready.UserID != userID.String() || ready.Kind != "wallet" || ready.Address != address || ready.Status != "success" {
+		t.Fatalf("scan.ready = %+v", ready)
 	}
 }
 
@@ -196,7 +210,7 @@ func TestHandleWalletCompleted_DelegationsRoundTripAndEOAObserved(t *testing.T) 
 		t.Fatalf("OnStarted: %v", err)
 	}
 
-	err := h.HandleCompleted(&nats.ScanCompletedMessage{
+	err := h.applyCompleted(&scanCompleted{
 		ScanID:  scanID,
 		Kind:    "wallet",
 		UserID:  userID,
@@ -215,7 +229,7 @@ func TestHandleWalletCompleted_DelegationsRoundTripAndEOAObserved(t *testing.T) 
 		},
 	})
 	if err != nil {
-		t.Fatalf("HandleCompleted: %v", err)
+		t.Fatalf("applyCompleted: %v", err)
 	}
 
 	var stored domain.ScanResultEntity
@@ -268,7 +282,7 @@ func TestHandleWalletCompleted_LegacyAAStillDecoded(t *testing.T) {
 		t.Fatalf("OnStarted: %v", err)
 	}
 
-	err := h.HandleCompleted(&nats.ScanCompletedMessage{
+	err := h.applyCompleted(&scanCompleted{
 		ScanID:  scanID,
 		Kind:    "wallet",
 		UserID:  userID,
@@ -285,7 +299,7 @@ func TestHandleWalletCompleted_LegacyAAStillDecoded(t *testing.T) {
 		},
 	})
 	if err != nil {
-		t.Fatalf("HandleCompleted: %v", err)
+		t.Fatalf("applyCompleted: %v", err)
 	}
 
 	var stored domain.ScanResultEntity

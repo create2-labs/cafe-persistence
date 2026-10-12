@@ -14,6 +14,7 @@ import (
 	"cafe-persistence/pkg/scan"
 
 	"github.com/create2-labs/cafe-contracts/cafenatsv01"
+	lifecycle "github.com/create2-labs/cafe-contracts/discovery/scanlifecycle/v1"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
@@ -54,7 +55,7 @@ func NewScanEventHandler(
 	}
 }
 
-func (h *ScanEventHandler) HandleStarted(msg *nats.ScanStartedMessage) error {
+func (h *ScanEventHandler) applyStarted(msg *scanStarted) error {
 	// TODO: tracing integration
 	log.Info().
 		Str("scan_id", msg.ScanID.String()).
@@ -83,9 +84,7 @@ func (h *ScanEventHandler) HandleStarted(msg *nats.ScanStartedMessage) error {
 	return nil
 }
 
-const subjectScanCompleted = "scan.completed"
-
-func (h *ScanEventHandler) HandleCompleted(msg *nats.ScanCompletedMessage) error {
+func (h *ScanEventHandler) applyCompleted(msg *scanCompleted) error {
 	log.Info().
 		Str("scan_id", msg.ScanID.String()).
 		Str("kind", msg.Kind).
@@ -106,12 +105,12 @@ func (h *ScanEventHandler) HandleCompleted(msg *nats.ScanCompletedMessage) error
 	}
 }
 
-func (h *ScanEventHandler) handleTLSCompleted(ctx context.Context, msg *nats.ScanCompletedMessage) error {
+func (h *ScanEventHandler) handleTLSCompleted(ctx context.Context, msg *scanCompleted) error {
 	current, _ := h.tlsWriter.GetStatus(msg.ScanID)
 	if current == "" {
 		log.Warn().
 			Str("scan_id", msg.ScanID.String()).
-			Str("subject", subjectScanCompleted).
+			Str("subject", lifecycle.SubjectScanCompleted).
 			Msg("persistence: missing scan on completed (no row yet), will insert")
 	}
 	if !scan.ValidTransition(current, scan.StateSUCCESS) {
@@ -119,7 +118,7 @@ func (h *ScanEventHandler) handleTLSCompleted(ctx context.Context, msg *nats.Sca
 			Str("scan_id", msg.ScanID.String()).
 			Str("current_status", current).
 			Str("attempted_status", scan.StateSUCCESS).
-			Str("subject", subjectScanCompleted).
+			Str("subject", lifecycle.SubjectScanCompleted).
 			Msg("persistence: invalid transition or duplicate completion, ignoring")
 		return nil
 	}
@@ -151,7 +150,7 @@ func (h *ScanEventHandler) handleTLSCompleted(ctx context.Context, msg *nats.Sca
 	return nil
 }
 
-func (h *ScanEventHandler) handleWalletCompleted(ctx context.Context, msg *nats.ScanCompletedMessage) error {
+func (h *ScanEventHandler) handleWalletCompleted(ctx context.Context, msg *scanCompleted) error {
 	log.Debug().
 		Str("scan_id", msg.ScanID.String()).
 		Str("user_id", msg.UserID.String()).
@@ -165,7 +164,7 @@ func (h *ScanEventHandler) handleWalletCompleted(ctx context.Context, msg *nats.
 	if current == "" {
 		log.Warn().
 			Str("scan_id", msg.ScanID.String()).
-			Str("subject", subjectScanCompleted).
+			Str("subject", lifecycle.SubjectScanCompleted).
 			Msg("persistence: missing scan on completed (no row yet), will insert")
 	}
 	if !scan.ValidTransition(current, scan.StateSUCCESS) {
@@ -173,7 +172,7 @@ func (h *ScanEventHandler) handleWalletCompleted(ctx context.Context, msg *nats.
 			Str("scan_id", msg.ScanID.String()).
 			Str("current_status", current).
 			Str("attempted_status", scan.StateSUCCESS).
-			Str("subject", subjectScanCompleted).
+			Str("subject", lifecycle.SubjectScanCompleted).
 			Msg("persistence: invalid transition or duplicate completion, ignoring")
 		return nil
 	}
@@ -222,7 +221,7 @@ func (h *ScanEventHandler) handleWalletCompleted(ctx context.Context, msg *nats.
 // publishWalletObserved emits cafe.discovery.wallet.observed v0.1 JSON (informational observation on the bus).
 // It is not a command and must not be treated by CPM as an implicit assessment trigger — see cafe_cpm_v1_prompts_0.7.md (policy.assessment.requested is the canonical trigger).
 // Best-effort; does not fail the scan write path.
-func (h *ScanEventHandler) publishWalletObserved(msg *nats.ScanCompletedMessage, result *domain.ScanResult) {
+func (h *ScanEventHandler) publishWalletObserved(msg *scanCompleted, result *domain.ScanResult) {
 	if h.natsConn == nil {
 		return
 	}
@@ -261,7 +260,7 @@ func (h *ScanEventHandler) decodeResult(in interface{}, out interface{}) error {
 }
 
 func (h *ScanEventHandler) commitWalletCompletion(
-	msg *nats.ScanCompletedMessage,
+	msg *scanCompleted,
 	entity *domain.ScanResultEntity,
 	result *domain.ScanResult,
 ) (acquired bool, err error) {
@@ -302,7 +301,7 @@ func (h *ScanEventHandler) commitWalletCompletion(
 }
 
 func (h *ScanEventHandler) commitTLSCompletion(
-	msg *nats.ScanCompletedMessage,
+	msg *scanCompleted,
 	entity *domain.TLSScanResultEntity,
 	result *domain.TLSScanResult,
 ) (acquired bool, err error) {
@@ -382,9 +381,7 @@ func (h *ScanEventHandler) confirmExistingUsageOrAcquire(
 	return reserved, nil
 }
 
-const subjectScanFailed = "scan.failed"
-
-func (h *ScanEventHandler) HandleFailed(msg *nats.ScanFailedMessage) error {
+func (h *ScanEventHandler) applyFailed(msg *scanFailed) error {
 	log.Info().
 		Str("scan_id", msg.ScanID.String()).
 		Str("kind", msg.Kind).
@@ -406,7 +403,7 @@ func (h *ScanEventHandler) HandleFailed(msg *nats.ScanFailedMessage) error {
 	}
 }
 
-func (h *ScanEventHandler) handleTLSFailed(ctx context.Context, msg *nats.ScanFailedMessage) error {
+func (h *ScanEventHandler) handleTLSFailed(ctx context.Context, msg *scanFailed) error {
 	current, err := h.tlsWriter.GetStatus(msg.ScanID)
 	if err != nil {
 		log.Error().Err(err).Str("scan_id", msg.ScanID.String()).Msg("persistence: GetStatus failed")
@@ -415,14 +412,14 @@ func (h *ScanEventHandler) handleTLSFailed(ctx context.Context, msg *nats.ScanFa
 	if current == "" {
 		log.Warn().
 			Str("scan_id", msg.ScanID.String()).
-			Str("subject", subjectScanFailed).
+			Str("subject", lifecycle.SubjectScanFailed).
 			Msg("persistence: missing scan on failed (no row yet), will insert")
 	} else if !scan.ValidTransition(current, scan.StateFAILED) {
 		log.Warn().
 			Str("scan_id", msg.ScanID.String()).
 			Str("current_status", current).
 			Str("attempted_status", scan.StateFAILED).
-			Str("subject", subjectScanFailed).
+			Str("subject", lifecycle.SubjectScanFailed).
 			Msg("persistence: invalid transition, ignoring")
 		return nil
 	}
@@ -442,7 +439,7 @@ func (h *ScanEventHandler) handleTLSFailed(ctx context.Context, msg *nats.ScanFa
 	return nil
 }
 
-func (h *ScanEventHandler) handleWalletFailed(ctx context.Context, msg *nats.ScanFailedMessage) error {
+func (h *ScanEventHandler) handleWalletFailed(ctx context.Context, msg *scanFailed) error {
 	current, err := h.walletWriter.GetStatus(msg.ScanID)
 	if err != nil {
 		log.Error().Err(err).Str("scan_id", msg.ScanID.String()).Msg("persistence: GetStatus failed")
@@ -451,14 +448,14 @@ func (h *ScanEventHandler) handleWalletFailed(ctx context.Context, msg *nats.Sca
 	if current == "" {
 		log.Warn().
 			Str("scan_id", msg.ScanID.String()).
-			Str("subject", subjectScanFailed).
+			Str("subject", lifecycle.SubjectScanFailed).
 			Msg("persistence: missing scan on failed (no row yet), will insert")
 	} else if !scan.ValidTransition(current, scan.StateFAILED) {
 		log.Warn().
 			Str("scan_id", msg.ScanID.String()).
 			Str("current_status", current).
 			Str("attempted_status", scan.StateFAILED).
-			Str("subject", subjectScanFailed).
+			Str("subject", lifecycle.SubjectScanFailed).
 			Msg("persistence: invalid transition, ignoring")
 		return nil
 	}
@@ -502,10 +499,10 @@ func (h *ScanEventHandler) publishScanReady(userID uuid.UUID, kind, endpoint, ad
 	if h.natsConn == nil {
 		return
 	}
-	ready := nats.ScanReadyMessage{
-		UserID: userID, Kind: kind, Endpoint: endpoint, Address: address, Status: status,
+	ready := lifecycle.Ready{
+		UserID: userID.String(), Kind: kind, Endpoint: endpoint, Address: address, Status: status,
 	}
-	if err := nats.PublishJSON(h.natsConn, nats.SubjectScanReady, ready); err != nil {
+	if err := nats.PublishJSON(h.natsConn, lifecycle.SubjectScanReady, ready); err != nil {
 		log.Warn().Err(err).Str("kind", kind).Str("status", status).Msg("persistence: scan.ready publish failed")
 	}
 }

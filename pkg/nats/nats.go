@@ -90,23 +90,8 @@ func PublishJSON(conn Connection, subject string, payload interface{}) error {
 	return conn.Publish(subject, data)
 }
 
-// Subjects for NATS messaging
-const (
-	SubjectWalletScan      = "cafe.discovery.wallet.scan"
-	SubjectTLSScan         = "cafe.discovery.tls.scan"
-	QueueScanners          = "cafe.scanners"
-
-	// Event subjects for persistence service (scan lifecycle)
-	SubjectScanRequestedTLS       = "scan.requested.tls"
-	SubjectScanRequestedWallet    = "scan.requested.wallet"
-	SubjectScanStarted            = "scan.started"
-	SubjectScanCompleted          = "scan.completed"
-	SubjectScanFailed             = "scan.failed"
-	SubjectScanReady              = "scan.ready" // published by persistence after writing to Redis/Postgres so API can return result on GET
-	SubjectScannerHeartbeatTLS    = "scanner.heartbeat.tls"
-	SubjectScannerHeartbeatWallet = "scanner.heartbeat.wallet"
-	SubjectPersistenceReady       = "persistence.ready"
-)
+// Queue groups stay in this service. Scan subjects come from cafe-contracts.
+const QueueScanners = "cafe.scanners"
 
 // QueuePersistence is the queue name for persistence service consumers
 const QueuePersistence = "cafe.persistence"

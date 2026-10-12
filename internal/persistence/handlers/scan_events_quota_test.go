@@ -8,7 +8,6 @@ import (
 	"cafe-persistence/internal/persistence/planlimit"
 	"cafe-persistence/internal/persistence/storage"
 	"cafe-persistence/internal/repository"
-	"cafe-persistence/pkg/nats"
 	"cafe-persistence/pkg/scan"
 
 	"github.com/google/uuid"
@@ -103,7 +102,7 @@ func TestCommitWalletCompletion_AtLimitOneRichOneStub(t *testing.T) {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			msg := &nats.ScanCompletedMessage{
+			msg := &scanCompleted{
 				ScanID: scanIDs[idx], Kind: "wallet", UserID: userID, Address: address,
 				Result: richResult,
 			}
@@ -190,7 +189,7 @@ func TestCommitWalletCompletion_UnlimitedAlwaysRecordsLedger(t *testing.T) {
 		Algorithm: domain.AlgorithmECDSAsecp256k1, NISTLevel: domain.NISTLevel1,
 		RiskScore: 1.0, Networks: []string{"ethereum"},
 	}
-	msg := &nats.ScanCompletedMessage{
+	msg := &scanCompleted{
 		ScanID: scanID, Kind: "wallet", UserID: userID, Address: address, Result: rich,
 	}
 	entity := domain.FromScanResult(userID, rich)
@@ -300,11 +299,11 @@ func TestHandleWalletFailed_ReleasesReservation(t *testing.T) {
 		t.Fatalf("OnStarted: %v", err)
 	}
 
-	err := handler.HandleFailed(&nats.ScanFailedMessage{
+	err := handler.applyFailed(&scanFailed{
 		ScanID: scanID, Kind: "wallet", UserID: userID, Address: address, Error: "rpc down",
 	})
 	if err != nil {
-		t.Fatalf("HandleFailed: %v", err)
+		t.Fatalf("applyFailed: %v", err)
 	}
 	assertUsageCount(t, db, userID, domain.ScanUsageKindWallet, 1)
 	if _, err := usageForScan(db, scanID); err == nil {
@@ -331,11 +330,11 @@ func TestHandleWalletFailed_AfterSuccessKeepsUsage(t *testing.T) {
 		t.Fatalf("seed success: %v", err)
 	}
 
-	err := handler.HandleFailed(&nats.ScanFailedMessage{
+	err := handler.applyFailed(&scanFailed{
 		ScanID: scanID, Kind: "wallet", UserID: userID, Address: address, Error: "late",
 	})
 	if err != nil {
-		t.Fatalf("HandleFailed: %v", err)
+		t.Fatalf("applyFailed: %v", err)
 	}
 	assertUsageCount(t, db, userID, domain.ScanUsageKindWallet, 1)
 	assertWalletStatus(t, db, scanID, scan.StateSUCCESS, "")
@@ -393,11 +392,11 @@ func TestHandleTLSFailed_ReleasesReservation(t *testing.T) {
 		t.Fatalf("OnStarted: %v", err)
 	}
 
-	err := handler.HandleFailed(&nats.ScanFailedMessage{
+	err := handler.applyFailed(&scanFailed{
 		ScanID: scanID, Kind: "tls", UserID: userID, Endpoint: endpoint, Error: "dial timeout",
 	})
 	if err != nil {
-		t.Fatalf("HandleFailed: %v", err)
+		t.Fatalf("applyFailed: %v", err)
 	}
 	assertUsageCount(t, db, userID, domain.ScanUsageKindEndpoint, 0)
 	assertTLSStatus(t, db, scanID, scan.StateFAILED, "dial timeout")
@@ -437,7 +436,7 @@ func tlsResult(url string) *domain.TLSScanResult {
 
 func commitWallet(t *testing.T, handler *ScanEventHandler, userID, scanID uuid.UUID, address string, result *domain.ScanResult) bool {
 	t.Helper()
-	msg := &nats.ScanCompletedMessage{
+	msg := &scanCompleted{
 		ScanID: scanID, Kind: "wallet", UserID: userID, Address: address, Result: result,
 	}
 	entity := domain.FromScanResult(userID, result)
@@ -451,7 +450,7 @@ func commitWallet(t *testing.T, handler *ScanEventHandler, userID, scanID uuid.U
 
 func commitTLS(t *testing.T, handler *ScanEventHandler, userID, scanID uuid.UUID, endpoint string, result *domain.TLSScanResult) bool {
 	t.Helper()
-	msg := &nats.ScanCompletedMessage{
+	msg := &scanCompleted{
 		ScanID: scanID, Kind: "tls", UserID: userID, Endpoint: endpoint, Result: result,
 	}
 	user := &userID

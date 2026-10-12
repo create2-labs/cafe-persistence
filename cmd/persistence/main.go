@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"os"
 	"os/signal"
@@ -11,18 +12,20 @@ import (
 	"syscall"
 	"time"
 
+	signalv1 "github.com/create2-labs/cafe-contracts/discovery/persistencesignal/v1"
+
 	"cafe-persistence/internal/config"
 	"cafe-persistence/internal/cpapi"
-	"cafe-persistence/internal/cpstore"
 	"cafe-persistence/internal/cpddl"
+	"cafe-persistence/internal/cpstore"
 	"cafe-persistence/internal/health"
 	"cafe-persistence/internal/persistence/handlers"
-	"cafe-persistence/internal/scanddl"
-	"cafe-persistence/internal/persistence/planlimit"
 	persistenceNats "cafe-persistence/internal/persistence/nats"
+	"cafe-persistence/internal/persistence/planlimit"
 	persistenceStorage "cafe-persistence/internal/persistence/storage"
 	"cafe-persistence/internal/repository"
 	"cafe-persistence/internal/scanapi"
+	"cafe-persistence/internal/scanddl"
 	natsconn "cafe-persistence/pkg/nats"
 	postgresdb "cafe-persistence/pkg/postgres"
 	redisconn "cafe-persistence/pkg/redis"
@@ -162,9 +165,13 @@ func main() {
 
 	// Signal to backend that persistence is ready; repeat for a while so backend can catch it when it starts after us
 	go func() {
-		payload := []byte("{}")
+		payload, err := json.Marshal(signalv1.Ready{})
+		if err != nil {
+			log.Warn().Err(err).Msg("persistence.ready marshal failed")
+			return
+		}
 		for i := 0; i < 40; i++ {
-			if err := nc.Publish(natsconn.SubjectPersistenceReady, payload); err != nil {
+			if err := nc.Publish(signalv1.SubjectPersistenceReady, payload); err != nil {
 				log.Warn().Err(err).Msg("persistence.ready publish failed")
 			}
 			time.Sleep(3 * time.Second)
