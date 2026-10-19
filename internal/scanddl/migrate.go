@@ -50,6 +50,8 @@ var ScanTableNames = []string{
 }
 
 // MigrateScanSchema runs AutoMigrate on scan tables and applies IMM index DDL.
+// AutoMigrate adds nullable scan_results.transition_id from domain.ScanResultEntity.
+// tls_scan_results does not receive that identity.
 func MigrateScanSchema(db *gorm.DB) error {
 	if err := db.AutoMigrate(
 		&domain.TLSScanResultEntity{},

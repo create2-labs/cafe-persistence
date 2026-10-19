@@ -56,6 +56,42 @@ func TestMigrateScanSchema_matchesGoldenIndexes(t *testing.T) {
 		t.Fatalf("index snapshot mismatch:\n  got:  %v\n  want: %v", got, want)
 	}
 	assertWalletRecoveryColumns(t, db)
+	assertWalletTransitionID(t, db)
+}
+
+func assertWalletTransitionID(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	type col struct {
+		IsNullable string
+		DataType   string
+	}
+	var wallet col
+	err := db.Raw(`
+SELECT is_nullable, data_type
+FROM information_schema.columns
+WHERE table_schema = 'public'
+  AND table_name = 'scan_results'
+  AND column_name = 'transition_id'`).Scan(&wallet).Error
+	if err != nil {
+		t.Fatalf("read scan_results.transition_id: %v", err)
+	}
+	if wallet.DataType != "text" || wallet.IsNullable != "YES" {
+		t.Fatalf("scan_results.transition_id must be nullable text, got %+v", wallet)
+	}
+
+	var tlsCount int64
+	err = db.Raw(`
+SELECT COUNT(*)
+FROM information_schema.columns
+WHERE table_schema = 'public'
+  AND table_name = 'tls_scan_results'
+  AND column_name = 'transition_id'`).Scan(&tlsCount).Error
+	if err != nil {
+		t.Fatalf("read tls_scan_results.transition_id: %v", err)
+	}
+	if tlsCount != 0 {
+		t.Fatalf("tls_scan_results must not have transition_id, count %d", tlsCount)
+	}
 }
 
 func assertWalletRecoveryColumns(t *testing.T, db *gorm.DB) {
