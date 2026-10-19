@@ -29,6 +29,7 @@ type ScanResultEntity struct {
 	Connections       string            `gorm:"type:text" json:"-"`                   // JSON array stored as text
 	Status            string            `gorm:"type:varchar(20);index" json:"status"` // empty/PENDING until scan.started (RUNNING); then SUCCESS, FAILED, TIMEOUT, UNREACHABLE
 	Error             string            `gorm:"type:text" json:"error,omitempty"`     // Error message when status is FAILED
+	TransitionID      *string           `gorm:"type:text" json:"-"`                   // last applied wallet transition; NULL until written; absent on TLS
 	CreatedAt         time.Time         `json:"created_at"`
 	UpdatedAt         time.Time         `json:"updated_at"`
 	DeletedAt         gorm.DeletedAt    `gorm:"index" json:"-"`
