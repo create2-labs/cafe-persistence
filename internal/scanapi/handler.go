@@ -13,6 +13,7 @@ import (
 	"cafe-persistence/internal/domain"
 	"cafe-persistence/internal/persistence/storage"
 	"cafe-persistence/internal/repository"
+	natsconn "cafe-persistence/pkg/nats"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -27,6 +28,7 @@ type Handler struct {
 	cache       *storage.RedisCache
 	chainCfg    *config.ChainConfig
 	walletDB    *gorm.DB
+	events      natsconn.Connection
 }
 
 // NewHandler wires scan API dependencies.
