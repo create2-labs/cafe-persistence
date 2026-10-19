@@ -24,6 +24,7 @@ func TestScanV1OpenAPI_RequiredPathsDocumented(t *testing.T) {
 		scanroutes.PendingByScanID,
 		scanroutes.WalletScans,
 		scanroutes.WalletScanByID,
+		scanroutes.WalletScanTransition,
 		scanroutes.TLSScans,
 		scanroutes.TLSScansDefaults,
 		scanroutes.TLSScanByID,
@@ -220,6 +221,49 @@ func TestScanV1OpenAPI_DescriptionMentionsADR(t *testing.T) {
 		if !strings.Contains(lower, needle) {
 			t.Fatalf("info.description missing %q", needle)
 		}
+	}
+}
+
+func TestScanV1OpenAPI_WalletTransition(t *testing.T) {
+	spec := loadScanV1OpenAPISpec(t)
+	paths := spec["paths"].(map[string]any)
+	path, ok := paths[scanroutes.WalletScanTransition].(map[string]any)
+	if !ok {
+		t.Fatal("transition path missing")
+	}
+	post := path["post"].(map[string]any)
+	if post["operationId"] != "applyWalletTransition" {
+		t.Fatalf("operationId = %v", post["operationId"])
+	}
+	schemas := spec["components"].(map[string]any)["schemas"].(map[string]any)
+	quota := schemas["WalletTransitionQuotaAction"].(map[string]any)["enum"].([]any)
+	if len(quota) != 3 || quota[0] != "none" || quota[1] != "keep" || quota[2] != "release" {
+		t.Fatalf("quota_action enum = %#v", quota)
+	}
+	outcomes := schemas["WalletTransitionOutcome"].(map[string]any)["enum"].([]any)
+	if len(outcomes) != 6 {
+		t.Fatalf("outcome enum = %#v", outcomes)
+	}
+	resp := schemas["WalletTransitionResponse"].(map[string]any)
+	required := map[string]bool{}
+	for _, name := range resp["required"].([]any) {
+		required[name.(string)] = true
+	}
+	for _, name := range []string{"outcome", "projection_ready", "ready_published"} {
+		if !required[name] {
+			t.Fatalf("response required missing %s", name)
+		}
+	}
+	if required["status"] {
+		t.Fatal("status must stay optional on retryable_error and rejected")
+	}
+	req := schemas["WalletTransitionRequest"].(map[string]any)["properties"].(map[string]any)
+	if _, ok := req["error"]; !ok {
+		t.Fatal("request error property missing")
+	}
+	errDesc, _ := req["error"].(map[string]any)["description"].(string)
+	if !strings.Contains(errDesc, "SUCCESS") {
+		t.Fatal("error must be documented as absent on SUCCESS")
 	}
 }
 
