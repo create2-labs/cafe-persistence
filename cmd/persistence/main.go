@@ -130,6 +130,7 @@ func main() {
 		cfgChain,
 	)
 	scanAPIHandler.EnableWalletTransition(db.GetDB())
+	scanAPIHandler.EnableWalletEvents(nc)
 	cpAPIHandler := cpapi.NewHandler(cpstore.NewPostgresStore(db.GetDB()))
 	internalMux := http.NewServeMux()
 	scanapi.RegisterRoutes(internalMux, scanAPIHandler)

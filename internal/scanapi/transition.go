@@ -1,21 +1,30 @@
 package scanapi
 
 import (
+	"context"
 	"net/http"
 	"strings"
 
 	"cafe-persistence/internal/domain"
+	"cafe-persistence/internal/walletobservation"
 	"cafe-persistence/internal/wallettransition"
+	natsconn "cafe-persistence/pkg/nats"
 	"cafe-persistence/pkg/scan"
 
+	"github.com/create2-labs/cafe-contracts/cafenatsv01"
+	lifecycle "github.com/create2-labs/cafe-contracts/discovery/scanlifecycle/v1"
 	"github.com/google/uuid"
+	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
 )
 
 // EnableWalletTransition attaches the database ApplyWalletTransition writes.
-// This route does not publish Redis or NATS projections.
 func (h *Handler) EnableWalletTransition(db *gorm.DB) {
 	h.walletDB = db
+}
+
+func (h *Handler) EnableWalletEvents(events natsconn.Connection) {
+	h.events = events
 }
 
 type transitionBody struct {
@@ -54,17 +63,93 @@ func (h *Handler) ApplyWalletTransition(w http.ResponseWriter, r *http.Request) 
 	}
 	cmd, valid := transitionCommand(headerUser, &body)
 	if !valid {
-		writeTransition(w, wallettransition.Result{Outcome: wallettransition.OutcomeRejected})
+		writeTransition(w, wallettransition.Result{Outcome: wallettransition.OutcomeRejected}, false, false)
 		return
 	}
-	writeTransition(w, wallettransition.Apply(h.walletDB, h.ledger, scanID, cmd))
+	res := wallettransition.Apply(h.walletDB, h.ledger, scanID, cmd)
+	ready, published := h.projectTransition(r.Context(), res)
+	writeTransition(w, res, ready, published)
 }
 
-func writeTransition(w http.ResponseWriter, res wallettransition.Result) {
+func writeTransition(w http.ResponseWriter, res wallettransition.Result, projectionReady, readyPublished bool) {
 	writeJSON(w, http.StatusOK, transitionResponse{
-		Outcome: res.Outcome,
-		Status:  res.Status,
+		Outcome:         res.Outcome,
+		Status:          res.Status,
+		ProjectionReady: projectionReady,
+		ReadyPublished:  readyPublished,
 	})
+}
+
+func (h *Handler) projectTransition(ctx context.Context, res wallettransition.Result) (bool, bool) {
+	switch res.Outcome {
+	case wallettransition.OutcomeApplied, wallettransition.OutcomeAlreadyApplied:
+		if res.Row == nil || !scan.IsTerminal(res.Row.Status) {
+			return false, false
+		}
+		return h.projectTerminal(ctx, res.Row)
+	default:
+		return false, false
+	}
+}
+
+func (h *Handler) projectTerminal(ctx context.Context, row *domain.ScanResultEntity) (bool, bool) {
+	if h.cache == nil || row == nil {
+		return false, false
+	}
+	var err error
+	if row.Status == scan.StateSUCCESS {
+		err = h.cache.SaveWalletScan(ctx, row.UserID, row.Address, row.ToScanResult())
+	} else {
+		err = h.cache.SaveWalletFailure(ctx, row.UserID, row.Address, row.Error)
+	}
+	if err != nil {
+		log.Error().Err(err).Str("scan_id", row.ID.String()).Msg("wallet transition redis projection failed")
+		return false, false
+	}
+	readyOK := h.publishScanReady(row)
+	if row.Status == scan.StateSUCCESS {
+		h.publishWalletObserved(row)
+	}
+	return true, readyOK
+}
+
+func (h *Handler) publishScanReady(row *domain.ScanResultEntity) bool {
+	if h.events == nil {
+		return false
+	}
+	status := "failed"
+	if row.Status == scan.StateSUCCESS {
+		status = "success"
+	}
+	ready := lifecycle.Ready{UserID: row.UserID.String(), Kind: "wallet", Address: row.Address, Status: status}
+	if err := natsconn.PublishJSON(h.events, lifecycle.SubjectScanReady, ready); err != nil {
+		log.Warn().Err(err).Str("scan_id", row.ID.String()).Msg("wallet transition scan.ready failed")
+		return false
+	}
+	return true
+}
+
+func (h *Handler) publishWalletObserved(row *domain.ScanResultEntity) {
+	if h.events == nil {
+		return
+	}
+	var chains map[string]int64
+	if h.chainCfg != nil {
+		chains = h.chainCfg.ChainIDByNetwork()
+	}
+	result := row.ToScanResult()
+	ev := walletobservation.ToWalletObservedEvent(walletobservation.ExportMetaForScanJob(row.ID), result, chains)
+	if err := ev.Validate(); err != nil {
+		if result != nil && result.Algorithm == "" {
+			log.Info().Str("scan_id", row.ID.String()).Msg("wallet transition wallet.observed skipped (empty algorithm)")
+			return
+		}
+		log.Error().Err(err).Str("scan_id", row.ID.String()).Msg("wallet transition wallet.observed export validation failed")
+		return
+	}
+	if err := natsconn.PublishJSON(h.events, cafenatsv01.NATSSubjectDiscoveryWalletObservedV01, &ev); err != nil {
+		log.Error().Err(err).Str("scan_id", row.ID.String()).Msg("wallet transition wallet.observed failed")
+	}
 }
 
 // transitionCommand validates a decoded body. A false result is a permanent rejection with no write.

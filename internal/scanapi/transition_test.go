@@ -2,20 +2,29 @@ package scanapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"cafe-persistence/internal/config"
 	"cafe-persistence/internal/domain"
+	"cafe-persistence/internal/persistence/storage"
 	"cafe-persistence/internal/repository"
 	"cafe-persistence/internal/scanroutes"
+	"cafe-persistence/internal/walletobservation"
 	"cafe-persistence/pkg/scan"
 
+	"github.com/create2-labs/cafe-contracts/cafenatsv01"
+	lifecycle "github.com/create2-labs/cafe-contracts/discovery/scanlifecycle/v1"
 	"github.com/google/uuid"
+	natslib "github.com/nats-io/nats.go"
+	goredis "github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )
 
@@ -286,4 +295,344 @@ func TestApplyWalletTransition_StatusAbsentWhenUnread(t *testing.T) {
 	user := uuid.New()
 	code, got := postTransition(t, transitionURL(ts.URL, uuid.New()), user, runningBody("t-closed", user))
 	assertHTTPOutcome(t, code, got, "retryable_error", "", false)
+}
+
+type transitionRedis struct {
+	mu     sync.Mutex
+	values map[string]string
+	setErr error
+}
+
+func (m *transitionRedis) Get(context.Context, string) *goredis.StringCmd {
+	return goredis.NewStringCmd(context.Background())
+}
+func (m *transitionRedis) Set(_ context.Context, key string, value interface{}, _ time.Duration) *goredis.StatusCmd {
+	cmd := goredis.NewStatusCmd(context.Background())
+	if m.setErr != nil {
+		cmd.SetErr(m.setErr)
+		return cmd
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	switch v := value.(type) {
+	case []byte:
+		m.values[key] = string(v)
+	case string:
+		m.values[key] = v
+	default:
+		raw, _ := json.Marshal(v)
+		m.values[key] = string(raw)
+	}
+	cmd.SetVal("OK")
+	return cmd
+}
+func (m *transitionRedis) SetArgs(context.Context, string, interface{}, goredis.SetArgs) *goredis.StatusCmd {
+	return goredis.NewStatusCmd(context.Background())
+}
+func (m *transitionRedis) Del(context.Context, ...string) *goredis.IntCmd {
+	return goredis.NewIntCmd(context.Background())
+}
+func (m *transitionRedis) Eval(context.Context, string, []string, ...interface{}) *goredis.Cmd {
+	return goredis.NewCmd(context.Background())
+}
+func (m *transitionRedis) Keys(context.Context, string) *goredis.StringSliceCmd {
+	return goredis.NewStringSliceCmd(context.Background())
+}
+func (m *transitionRedis) Close() error { return nil }
+func (m *transitionRedis) Ping(context.Context) *goredis.StatusCmd {
+	cmd := goredis.NewStatusCmd(context.Background())
+	cmd.SetVal("PONG")
+	return cmd
+}
+func (m *transitionRedis) get(key string) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.values[key]
+}
+
+type transitionBus struct {
+	mu       sync.Mutex
+	subjects []string
+	payloads [][]byte
+	fail     map[string]error
+}
+
+func (b *transitionBus) Publish(subject string, data []byte) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if err := b.fail[subject]; err != nil {
+		return err
+	}
+	b.subjects = append(b.subjects, subject)
+	b.payloads = append(b.payloads, append([]byte(nil), data...))
+	return nil
+}
+func (b *transitionBus) Subscribe(string, func(*natslib.Msg)) (*natslib.Subscription, error) {
+	return nil, nil
+}
+func (b *transitionBus) QueueSubscribe(string, string, func(*natslib.Msg)) (*natslib.Subscription, error) {
+	return nil, nil
+}
+func (b *transitionBus) Close()            {}
+func (b *transitionBus) IsConnected() bool { return true }
+func (b *transitionBus) count(subject string) int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	n := 0
+	for _, s := range b.subjects {
+		if s == subject {
+			n++
+		}
+	}
+	return n
+}
+func (b *transitionBus) body(subject string, nth int) []byte {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	n := 0
+	for i, s := range b.subjects {
+		if s != subject {
+			continue
+		}
+		if n == nth {
+			return b.payloads[i]
+		}
+		n++
+	}
+	return nil
+}
+
+func startProjectedAPI(t *testing.T, cache *transitionRedis, bus *transitionBus) (*httptest.Server, *gorm.DB) {
+	t.Helper()
+	db := setupScanAPITestDB(t)
+	h := NewHandler(
+		newMemoryPendingRepo(),
+		repository.NewScanResultRepository(db),
+		repository.NewTLSScanResultRepository(db),
+		repository.NewScanUsageLedgerRepository(db),
+		storage.NewRedisCache(cache),
+		&config.ChainConfig{},
+	)
+	h.EnableWalletTransition(db)
+	h.EnableWalletEvents(bus)
+	return httptest.NewServer(NewServer("127.0.0.1", "0", testServiceToken, h).HTTPHandler()), db
+}
+
+func walletCacheKey(user uuid.UUID) string {
+	return "wallet:user:" + user.String() + ":" + transitionAddr
+}
+
+func assertProjected(t *testing.T, code int, got map[string]any, outcome, status string, ready, published bool) {
+	t.Helper()
+	if code != http.StatusOK || got["outcome"] != outcome || got["status"] != status ||
+		got["projection_ready"] != ready || got["ready_published"] != published {
+		t.Fatalf("status %d body %#v", code, got)
+	}
+}
+
+func observedEventID(t *testing.T, raw []byte) string {
+	t.Helper()
+	var ev struct {
+		EventID string `json:"event_id"`
+	}
+	if err := json.Unmarshal(raw, &ev); err != nil || ev.EventID == "" {
+		t.Fatalf("wallet.observed %s: %v", raw, err)
+	}
+	return ev.EventID
+}
+
+func TestApplyWalletTransition_ProjectsTerminalSuccess(t *testing.T) {
+	cache := &transitionRedis{values: map[string]string{}}
+	bus := &transitionBus{}
+	ts, db := startProjectedAPI(t, cache, bus)
+	defer ts.Close()
+	user := uuid.New()
+	ledger := repository.NewScanUsageLedgerRepository(db)
+	scanID := uuid.New()
+	if err := ledger.RecordSuccessUsage(user, scanID, domain.ScanUsageKindWallet); err != nil {
+		t.Fatal(err)
+	}
+	url := transitionURL(ts.URL, scanID)
+
+	code, got := postTransition(t, url, user, successBody("t-ok", user, transitionAddr))
+	assertProjected(t, code, got, "applied", scan.StateSUCCESS, true, true)
+	if !strings.Contains(cache.get(walletCacheKey(user)), `"risk_score":4`) {
+		t.Fatalf("redis %s", cache.get(walletCacheKey(user)))
+	}
+	readyRaw := bus.body(lifecycle.SubjectScanReady, 0)
+	var ready lifecycle.Ready
+	if err := json.Unmarshal(readyRaw, &ready); err != nil || ready.Status != "success" || ready.Address != transitionAddr || ready.Kind != "wallet" {
+		t.Fatalf("scan.ready %s", readyRaw)
+	}
+	wantID := walletobservation.ExportMetaForScanJob(scanID).EventID
+	if bus.count(cafenatsv01.NATSSubjectDiscoveryWalletObservedV01) != 1 || observedEventID(t, bus.body(cafenatsv01.NATSSubjectDiscoveryWalletObservedV01, 0)) != wantID {
+		t.Fatal("wallet.observed")
+	}
+
+	code, got = postTransition(t, url, user, successBody("t-ok", user, transitionAddr))
+	assertProjected(t, code, got, "already_applied", scan.StateSUCCESS, true, true)
+	if bus.count(lifecycle.SubjectScanReady) != 2 || bus.count(cafenatsv01.NATSSubjectDiscoveryWalletObservedV01) != 2 {
+		t.Fatalf("replay subjects ready=%d observed=%d", bus.count(lifecycle.SubjectScanReady), bus.count(cafenatsv01.NATSSubjectDiscoveryWalletObservedV01))
+	}
+	if observedEventID(t, bus.body(cafenatsv01.NATSSubjectDiscoveryWalletObservedV01, 1)) != wantID {
+		t.Fatal("replay event id changed")
+	}
+
+	loser := successBody("t-lose", user, transitionAddr)
+	loser["result"].(map[string]any)["risk_score"] = 9
+	code, got = postTransition(t, url, user, loser)
+	assertProjected(t, code, got, "already_terminal", scan.StateSUCCESS, false, false)
+	if !strings.Contains(cache.get(walletCacheKey(user)), `"risk_score":4`) || strings.Contains(cache.get(walletCacheKey(user)), `"risk_score":9`) {
+		t.Fatalf("loser rewrote redis %s", cache.get(walletCacheKey(user)))
+	}
+	if bus.count(lifecycle.SubjectScanReady) != 2 || bus.count(cafenatsv01.NATSSubjectDiscoveryWalletObservedV01) != 2 || ledgerRows(t, db, scanID) != 1 {
+		t.Fatal("loser published or changed the ledger")
+	}
+	runURL := transitionURL(ts.URL, uuid.New())
+	code, got = postTransition(t, runURL, user, runningBody("t-run", user))
+	assertProjected(t, code, got, "applied", scan.StateRUNNING, false, false)
+	code, got = postTransition(t, runURL, user, runningBody("t-other", user))
+	assertProjected(t, code, got, "already_running", scan.StateRUNNING, false, false)
+	if !strings.Contains(cache.get(walletCacheKey(user)), `"risk_score":4`) || bus.count(lifecycle.SubjectScanReady) != 2 || bus.count(cafenatsv01.NATSSubjectDiscoveryWalletObservedV01) != 2 {
+		t.Fatal("RUNNING published")
+	}
+}
+
+func TestApplyWalletTransition_FailedPublishesReadyOnly(t *testing.T) {
+	cache := &transitionRedis{values: map[string]string{}}
+	bus := &transitionBus{}
+	ts, db := startProjectedAPI(t, cache, bus)
+	defer ts.Close()
+	user := uuid.New()
+	scanID := uuid.New()
+	if err := repository.NewScanUsageLedgerRepository(db).RecordSuccessUsage(user, scanID, domain.ScanUsageKindWallet); err != nil {
+		t.Fatal(err)
+	}
+	code, got := postTransition(t, transitionURL(ts.URL, scanID), user, failedBody("t-fail", user))
+	assertProjected(t, code, got, "applied", scan.StateFAILED, true, true)
+	if !strings.Contains(cache.get(walletCacheKey(user)), "scan failed") {
+		t.Fatalf("redis %s", cache.get(walletCacheKey(user)))
+	}
+	var ready lifecycle.Ready
+	if err := json.Unmarshal(bus.body(lifecycle.SubjectScanReady, 0), &ready); err != nil || ready.Status != "failed" {
+		t.Fatalf("scan.ready %#v", ready)
+	}
+	if bus.count(cafenatsv01.NATSSubjectDiscoveryWalletObservedV01) != 0 || ledgerRows(t, db, scanID) != 0 {
+		t.Fatal("FAILED published wallet.observed or kept the ledger")
+	}
+}
+
+func TestApplyWalletTransition_RedisFailureKeepsCommit(t *testing.T) {
+	cache := &transitionRedis{values: map[string]string{}, setErr: errors.New("redis down")}
+	bus := &transitionBus{}
+	ts, db := startProjectedAPI(t, cache, bus)
+	defer ts.Close()
+	user := uuid.New()
+	scanID := uuid.New()
+	if err := repository.NewScanUsageLedgerRepository(db).RecordSuccessUsage(user, scanID, domain.ScanUsageKindWallet); err != nil {
+		t.Fatal(err)
+	}
+	code, got := postTransition(t, transitionURL(ts.URL, scanID), user, successBody("t-redis", user, transitionAddr))
+	assertProjected(t, code, got, "applied", scan.StateSUCCESS, false, false)
+	row, ok := loadWalletRow(t, db, scanID)
+	if !ok || row.Status != scan.StateSUCCESS || ledgerRows(t, db, scanID) != 1 || bus.count(lifecycle.SubjectScanReady) != 0 {
+		t.Fatalf("row %+v ok %v bus %d", row, ok, bus.count(lifecycle.SubjectScanReady))
+	}
+}
+
+func TestApplyWalletTransition_ReadyFailureStillObserves(t *testing.T) {
+	cache := &transitionRedis{values: map[string]string{}}
+	bus := &transitionBus{fail: map[string]error{lifecycle.SubjectScanReady: errors.New("nats down")}}
+	ts, db := startProjectedAPI(t, cache, bus)
+	defer ts.Close()
+	user := uuid.New()
+	scanID := uuid.New()
+	if err := repository.NewScanUsageLedgerRepository(db).RecordSuccessUsage(user, scanID, domain.ScanUsageKindWallet); err != nil {
+		t.Fatal(err)
+	}
+	code, got := postTransition(t, transitionURL(ts.URL, scanID), user, successBody("t-ready", user, transitionAddr))
+	assertProjected(t, code, got, "applied", scan.StateSUCCESS, true, false)
+	if bus.count(lifecycle.SubjectScanReady) != 0 || bus.count(cafenatsv01.NATSSubjectDiscoveryWalletObservedV01) != 1 {
+		t.Fatalf("ready=%d observed=%d", bus.count(lifecycle.SubjectScanReady), bus.count(cafenatsv01.NATSSubjectDiscoveryWalletObservedV01))
+	}
+	if ledgerRows(t, db, scanID) != 1 || cache.get(walletCacheKey(user)) == "" {
+		t.Fatal("ready failure rolled back the commit or skipped redis")
+	}
+}
+
+func TestApplyWalletTransition_ConcurrentCreatesOneRow(t *testing.T) {
+	cache := &transitionRedis{values: map[string]string{}}
+	bus := &transitionBus{}
+	ts, db := startProjectedAPI(t, cache, bus)
+	defer ts.Close()
+	user := uuid.New()
+	scanID := uuid.New()
+	if err := repository.NewScanUsageLedgerRepository(db).RecordSuccessUsage(user, scanID, domain.ScanUsageKindWallet); err != nil {
+		t.Fatal(err)
+	}
+	url := transitionURL(ts.URL, scanID)
+	type result struct {
+		code int
+		body map[string]any
+		err  error
+	}
+	out := make(chan result, 2)
+	var wg sync.WaitGroup
+	for _, id := range []string{"c-a", "c-b"} {
+		wg.Add(1)
+		go func(id string) {
+			defer wg.Done()
+			raw, err := json.Marshal(successBody(id, user, transitionAddr))
+			if err != nil {
+				out <- result{err: err}
+				return
+			}
+			req, err := authRequest(http.MethodPost, url, user, raw)
+			if err != nil {
+				out <- result{err: err}
+				return
+			}
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				out <- result{err: err}
+				return
+			}
+			defer func() { _ = resp.Body.Close() }()
+			var got map[string]any
+			err = json.NewDecoder(resp.Body).Decode(&got)
+			out <- result{code: resp.StatusCode, body: got, err: err}
+		}(id)
+	}
+	wg.Wait()
+	close(out)
+	var applied, terminal int
+	for res := range out {
+		if res.err != nil || res.code != http.StatusOK {
+			t.Fatalf("concurrent response %d %#v %v", res.code, res.body, res.err)
+		}
+		switch res.body["outcome"] {
+		case "applied":
+			applied++
+			if res.body["projection_ready"] != true || res.body["ready_published"] != true {
+				t.Fatalf("winner %#v", res.body)
+			}
+		case "already_terminal":
+			terminal++
+			if res.body["projection_ready"] != false || res.body["ready_published"] != false {
+				t.Fatalf("loser %#v", res.body)
+			}
+		default:
+			t.Fatalf("outcome %#v", res.body)
+		}
+	}
+	rows := int64(0)
+	if err := db.Model(&domain.ScanResultEntity{}).Where("id = ?", scanID).Count(&rows).Error; err != nil {
+		t.Fatal(err)
+	}
+	if applied != 1 || terminal != 1 || rows != 1 || ledgerRows(t, db, scanID) != 1 {
+		t.Fatalf("applied %d terminal %d rows %d ledger %d", applied, terminal, rows, ledgerRows(t, db, scanID))
+	}
+	if bus.count(lifecycle.SubjectScanReady) != 1 || bus.count(cafenatsv01.NATSSubjectDiscoveryWalletObservedV01) != 1 {
+		t.Fatal("concurrent loser published")
+	}
 }
