@@ -15,6 +15,7 @@ import (
 	"cafe-persistence/internal/repository"
 
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 // Handler implements the internal scan API (openapi/internal/scan/v1.yaml).
@@ -25,6 +26,7 @@ type Handler struct {
 	ledger      repository.ScanUsageLedgerRepository
 	cache       *storage.RedisCache
 	chainCfg    *config.ChainConfig
+	walletDB    *gorm.DB
 }
 
 // NewHandler wires scan API dependencies.
