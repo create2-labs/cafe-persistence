@@ -129,6 +129,7 @@ func main() {
 		cache,
 		cfgChain,
 	)
+	scanAPIHandler.EnableWalletTransition(db.GetDB())
 	cpAPIHandler := cpapi.NewHandler(cpstore.NewPostgresStore(db.GetDB()))
 	internalMux := http.NewServeMux()
 	scanapi.RegisterRoutes(internalMux, scanAPIHandler)
