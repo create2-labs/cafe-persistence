@@ -281,6 +281,38 @@ paths:
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
 
+  /wallets/scans/{scan_id}/transition:
+    post:
+      tags: [wallet-scans]
+      summary: Apply one wallet scan transition
+      operationId: applyWalletTransition
+      parameters:
+        - $ref: "#/components/parameters/ScanId"
+        - $ref: "#/components/parameters/UserIdHeader"
+        - $ref: "#/components/parameters/TenantIdHeader"
+        - $ref: "#/components/parameters/RequestIdHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WalletTransitionRequest"
+      responses:
+        "200":
+          description: |
+            Decoded command. `rejected` and `retryable_error` are HTTP 200.
+            Unreadable JSON and a missing or invalid `X-User-Id` are not outcomes.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WalletTransitionResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/ServiceUnauthorized"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
   /wallets/scans/{scan_id}:
     parameters:
       - $ref: "#/components/parameters/ScanId"
@@ -553,6 +585,58 @@ components:
       type: string
       enum: ["", "PENDING", "RUNNING", "SUCCESS", "FAILED", "TIMEOUT", "UNREACHABLE"]
       description: Native Postgres/Redis status before Discovery public lifecycle mapping.
+
+    WalletTransitionQuotaAction:
+      type: string
+      enum: [none, keep, release]
+
+    WalletTransitionOutcome:
+      type: string
+      enum: [applied, already_applied, already_running, already_terminal, retryable_error, rejected]
+
+    WalletTransitionRequest:
+      type: object
+      required: [transition_id, user_id, address, source_states, target_state, quota_action]
+      properties:
+        transition_id:
+          type: string
+        user_id:
+          type: string
+          format: uuid
+        address:
+          type: string
+          description: Authority for Redis, scan.ready, and quota. Normalized with the existing address normalizer.
+        source_states:
+          type: array
+          items:
+            $ref: "#/components/schemas/PersistenceScanStatus"
+        target_state:
+          type: string
+          enum: [RUNNING, SUCCESS, FAILED]
+        quota_action:
+          $ref: "#/components/schemas/WalletTransitionQuotaAction"
+        result:
+          type: object
+          description: Required for SUCCESS, where result.address matches address. Absent for RUNNING and FAILED.
+        error:
+          type: string
+          description: Present only for FAILED. A SUCCESS body does not include error.
+
+    WalletTransitionResponse:
+      type: object
+      required: [outcome, projection_ready, ready_published]
+      properties:
+        outcome:
+          $ref: "#/components/schemas/WalletTransitionOutcome"
+        status:
+          $ref: "#/components/schemas/PersistenceScanStatus"
+          description: |
+            Present for applied, already_applied, already_running, and already_terminal.
+            Omitted for retryable_error and rejected when state could not be reread.
+        projection_ready:
+          type: boolean
+        ready_published:
+          type: boolean
 
     ErrorResponse:
       type: object

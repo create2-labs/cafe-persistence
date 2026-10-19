@@ -31,6 +31,7 @@ func TestRouteLiteralsAreRelative(t *testing.T) {
 		scanroutes.PendingByScanID,
 		scanroutes.WalletScans,
 		scanroutes.WalletScanByID,
+		scanroutes.WalletScanTransition,
 		scanroutes.TLSScans,
 		scanroutes.TLSScansDefaults,
 		scanroutes.TLSScanByID,

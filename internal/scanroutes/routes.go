@@ -7,15 +7,16 @@ const V1Base = "/internal/scan/v1"
 
 // OpenAPI-relative paths (see openapi/internal/scan/v1.yaml paths block; server url = V1Base).
 const (
-	PendingWallet    = "/pending/wallet"
-	PendingTLS       = "/pending/tls"
-	PendingByScanID  = "/pending/{scan_id}"
-	WalletScans      = "/wallets/scans"
-	WalletScanByID   = "/wallets/scans/{scan_id}"
-	TLSScans         = "/tls/scans"
-	TLSScansDefaults = "/tls/scans/defaults"
-	TLSScanByID      = "/tls/scans/{scan_id}"
-	LedgerUsage      = "/ledger/usage"
+	PendingWallet        = "/pending/wallet"
+	PendingTLS           = "/pending/tls"
+	PendingByScanID      = "/pending/{scan_id}"
+	WalletScans          = "/wallets/scans"
+	WalletScanByID       = "/wallets/scans/{scan_id}"
+	WalletScanTransition = "/wallets/scans/{scan_id}/transition"
+	TLSScans             = "/tls/scans"
+	TLSScansDefaults     = "/tls/scans/defaults"
+	TLSScanByID          = "/tls/scans/{scan_id}"
+	LedgerUsage          = "/ledger/usage"
 )
 
 // Join returns the absolute mux path for a V1-relative route.
