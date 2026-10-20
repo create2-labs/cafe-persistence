@@ -19,13 +19,12 @@ import (
 )
 
 type ScanEventHandler struct {
-	tlsWriter    *storage.TLSWriter
-	walletWriter *storage.WalletWriter
-	redisCache   *storage.RedisCache
-	natsConn     nats.Connection // optional: when set, publish scan.ready after writing to Redis so API can return result on GET
-	db           *gorm.DB
-	ledger       repository.ScanUsageLedgerRepository
-	planLimits   *planlimit.Resolver
+	tlsWriter  *storage.TLSWriter
+	redisCache *storage.RedisCache
+	natsConn   nats.Connection // optional: when set, publish scan.ready after writing to Redis so API can return result on GET
+	db         *gorm.DB
+	ledger     repository.ScanUsageLedgerRepository
+	planLimits *planlimit.Resolver
 }
 
 const IGNORE_SCAN_MSG = "unknown scan kind, ignoring"
@@ -40,17 +39,16 @@ func NewScanEventHandler(
 	ledger repository.ScanUsageLedgerRepository,
 	planLimits *planlimit.Resolver,
 ) *ScanEventHandler {
-	// Wallet scan.ready and wallet.observed are no longer published from NATS.
-	// The chain map stays in the signature so existing callers do not change.
+	// Wallet NATS no longer writes or publishes. These parameters stay so existing callers do not change.
 	_ = chainIDsByNetwork
+	_ = walletWriter
 	return &ScanEventHandler{
-		tlsWriter:    tlsWriter,
-		walletWriter: walletWriter,
-		redisCache:   redisCache,
-		natsConn:     natsConn,
-		db:           db,
-		ledger:       ledger,
-		planLimits:   planLimits,
+		tlsWriter:  tlsWriter,
+		redisCache: redisCache,
+		natsConn:   natsConn,
+		db:         db,
+		ledger:     ledger,
+		planLimits: planLimits,
 	}
 }
 
@@ -94,7 +92,8 @@ func (h *ScanEventHandler) applyCompleted(msg *scanCompleted) error {
 	case "tls":
 		return h.handleTLSCompleted(ctx, msg)
 	case "wallet":
-		return h.handleWalletCompleted(msg)
+		ignoreWalletLifecycle(msg.ScanID)
+		return nil
 	default:
 		log.Warn().Str("kind", msg.Kind).Msg(IGNORE_SCAN_MSG)
 		return nil
@@ -146,62 +145,6 @@ func (h *ScanEventHandler) handleTLSCompleted(ctx context.Context, msg *scanComp
 	return nil
 }
 
-func (h *ScanEventHandler) handleWalletCompleted(msg *scanCompleted) error {
-	log.Debug().
-		Str("scan_id", msg.ScanID.String()).
-		Str("user_id", msg.UserID.String()).
-		Str("address", msg.Address).
-		Msg("persistence: wallet scan.completed received, checking status")
-	current, _ := h.walletWriter.GetStatus(msg.ScanID)
-	log.Debug().
-		Str("scan_id", msg.ScanID.String()).
-		Str("current_status", current).
-		Msg("persistence: wallet GetStatus result")
-	if current == "" {
-		log.Warn().
-			Str("scan_id", msg.ScanID.String()).
-			Str("subject", lifecycle.SubjectScanCompleted).
-			Msg("persistence: missing scan on completed (no row yet), will insert")
-	}
-	if !scan.ValidTransition(current, scan.StateSUCCESS) {
-		log.Warn().
-			Str("scan_id", msg.ScanID.String()).
-			Str("current_status", current).
-			Str("attempted_status", scan.StateSUCCESS).
-			Str("subject", lifecycle.SubjectScanCompleted).
-			Msg("persistence: invalid transition or duplicate completion, ignoring")
-		return nil
-	}
-	var result domain.ScanResult
-	if err := h.decodeResult(msg.Result, &result); err != nil {
-		log.Error().Err(err).Str("scan_id", msg.ScanID.String()).Msg("persistence: decode wallet result failed")
-		return err
-	}
-	domain.EnsureScanResultDelegations(&result)
-	domain.NormalizeScanResultWalletKind(&result)
-	log.Debug().Str("scan_id", msg.ScanID.String()).Msg("persistence: wallet result decoded OK")
-	entity := domain.FromScanResult(msg.UserID, &result)
-	entity.ID = msg.ScanID
-	acquired, err := h.commitWalletCompletion(msg, entity, &result)
-	if err != nil {
-		log.Error().Err(err).Str("scan_id", msg.ScanID.String()).Msg("persistence: commit wallet completion failed")
-		return err
-	}
-	if !acquired {
-		log.Warn().
-			Str("scan_id", msg.ScanID.String()).
-			Str("user_id", msg.UserID.String()).
-			Str("address", msg.Address).
-			Msg("persistence: wallet completion rejected (plan limit exceeded), stub persisted")
-		return nil
-	}
-	log.Info().
-		Str("scan_id", msg.ScanID.String()).
-		Str("address", msg.Address).
-		Msg("persistence: wallet Postgres write OK")
-	return nil
-}
-
 func ignoreWalletLifecycle(scanID uuid.UUID) {
 	log.Info().
 		Str("scan_id", scanID.String()).
@@ -217,47 +160,6 @@ func (h *ScanEventHandler) decodeResult(in interface{}, out interface{}) error {
 		return err
 	}
 	return json.Unmarshal(b, out)
-}
-
-func (h *ScanEventHandler) commitWalletCompletion(
-	msg *scanCompleted,
-	entity *domain.ScanResultEntity,
-	result *domain.ScanResult,
-) (acquired bool, err error) {
-	if msg.UserID == uuid.Nil || h.db == nil || h.ledger == nil || h.planLimits == nil {
-		if err := h.walletWriter.OnCompleted(msg.ScanID, entity); err != nil {
-			return false, err
-		}
-		return true, nil
-	}
-
-	limit, unlimited, err := h.planLimits.ScanLimit(msg.UserID, domain.ScanUsageKindWallet)
-	if err != nil {
-		return false, err
-	}
-
-	address := msg.Address
-	if address == "" {
-		address = entity.Address
-	}
-	if address == "" && result != nil {
-		address = result.Address
-	}
-
-	err = h.db.Transaction(func(tx *gorm.DB) error {
-		var slotErr error
-		acquired, slotErr = h.confirmExistingUsageOrAcquire(
-			tx, msg.UserID, msg.ScanID, domain.ScanUsageKindWallet, limit, unlimited,
-		)
-		if slotErr != nil {
-			return slotErr
-		}
-		if acquired {
-			return h.walletWriter.OnCompletedInTx(tx, msg.ScanID, entity)
-		}
-		return h.walletWriter.OnPlanLimitExceededInTx(tx, msg.ScanID, msg.UserID, address)
-	})
-	return acquired, err
 }
 
 func (h *ScanEventHandler) commitTLSCompletion(
