@@ -10,6 +10,7 @@ import (
 	"cafe-persistence/internal/persistence/storage"
 	"cafe-persistence/pkg/nats"
 	redisconn "cafe-persistence/pkg/redis"
+	"cafe-persistence/pkg/scan"
 
 	"github.com/google/uuid"
 	natslib "github.com/nats-io/nats.go"
@@ -112,6 +113,18 @@ func assertNoWalletProjection(t *testing.T, cache *memRedis, bus *recordingNATS)
 	}
 }
 
+func assertCompletedPayloadNotStored(t *testing.T, db *gorm.DB, scanID uuid.UUID, cache *memRedis, bus *recordingNATS) {
+	t.Helper()
+	var stored domain.ScanResultEntity
+	if err := db.Where("id = ?", scanID).First(&stored).Error; err != nil {
+		t.Fatalf("load row: %v", err)
+	}
+	if stored.Status != scan.StateRUNNING || stored.Type != "" || stored.Delegations != "" || stored.Algorithm != "" || stored.IsERC4337 {
+		t.Fatalf("completed payload stored: %+v", stored)
+	}
+	assertNoWalletProjection(t, cache, bus)
+}
+
 func TestHandleWalletCompleted_MissingDelegationsUnknownSkipsObserved(t *testing.T) {
 	h, db, cache, bus := setupDelegationHandler(t)
 	userID := uuid.New()
@@ -141,21 +154,7 @@ func TestHandleWalletCompleted_MissingDelegationsUnknownSkipsObserved(t *testing
 	if err != nil {
 		t.Fatalf("applyCompleted: %v", err)
 	}
-
-	var stored domain.ScanResultEntity
-	if err := db.Where("id = ?", scanID).First(&stored).Error; err != nil {
-		t.Fatalf("load row: %v", err)
-	}
-	if stored.Type != domain.AccountTypeUnknown {
-		t.Fatalf("type = %q", stored.Type)
-	}
-	if stored.Delegations != "[]" {
-		t.Fatalf("postgres delegations = %q", stored.Delegations)
-	}
-	if stored.Algorithm != "" || stored.IsEOA || stored.NISTLevel != 0 {
-		t.Fatalf("posture stored = %+v", stored)
-	}
-	assertNoWalletProjection(t, cache, bus)
+	assertCompletedPayloadNotStored(t, db, scanID, cache, bus)
 }
 
 func TestHandleWalletCompleted_DelegationsRoundTripAndEOAObserved(t *testing.T) {
@@ -189,16 +188,7 @@ func TestHandleWalletCompleted_DelegationsRoundTripAndEOAObserved(t *testing.T) 
 	if err != nil {
 		t.Fatalf("applyCompleted: %v", err)
 	}
-
-	var stored domain.ScanResultEntity
-	if err := db.Where("id = ?", scanID).First(&stored).Error; err != nil {
-		t.Fatal(err)
-	}
-	out := stored.ToScanResult()
-	if len(out.Delegations) != 1 || out.Delegations[0].ChainID != 1 || out.Delegations[0].DelegatedAddress != target {
-		t.Fatalf("postgres delegations = %#v raw=%s", out.Delegations, stored.Delegations)
-	}
-	assertNoWalletProjection(t, cache, bus)
+	assertCompletedPayloadNotStored(t, db, scanID, cache, bus)
 }
 
 func TestHandleWalletCompleted_LegacyAAStillDecoded(t *testing.T) {
@@ -229,18 +219,7 @@ func TestHandleWalletCompleted_LegacyAAStillDecoded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("applyCompleted: %v", err)
 	}
-
-	var stored domain.ScanResultEntity
-	if err := db.Where("id = ?", scanID).First(&stored).Error; err != nil {
-		t.Fatal(err)
-	}
-	if stored.Type != domain.AccountTypeAA || !stored.IsERC4337 {
-		t.Fatalf("stored = %+v", stored)
-	}
-	if stored.Delegations != "[]" {
-		t.Fatalf("delegations = %q", stored.Delegations)
-	}
-	assertNoWalletProjection(t, cache, bus)
+	assertCompletedPayloadNotStored(t, db, scanID, cache, bus)
 }
 
 func TestWalletStartedDoesNotInsert(t *testing.T) {

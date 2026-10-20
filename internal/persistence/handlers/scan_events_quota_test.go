@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"sync"
 	"testing"
 
 	"cafe-persistence/internal/domain"
@@ -66,223 +65,54 @@ func setupQuotaCompletionTest(t *testing.T) (*ScanEventHandler, *gorm.DB, uuid.U
 	return handler, db, userID, planID
 }
 
-func TestCommitWalletCompletion_AtLimitOneRichOneStub(t *testing.T) {
+func TestApplyCompleted_WalletDoesNotWriteScanOrLedger(t *testing.T) {
 	handler, db, userID, _ := setupQuotaCompletionTest(t)
-	address := "0xlimitrace"
-
-	seedScan := uuid.New()
-	if err := db.Create(&domain.ScanUsageEventEntity{
-		ID: uuid.New(), UserID: userID, ScanID: seedScan,
-		ScanKind: domain.ScanUsageKindWallet,
-	}).Error; err != nil {
-		t.Fatalf("seed ledger: %v", err)
+	address := "0xignored"
+	missingID := uuid.New()
+	runningID := uuid.New()
+	if err := storage.NewWalletWriter(db).OnStarted(runningID, userID, address); err != nil {
+		t.Fatalf("OnStarted: %v", err)
+	}
+	seedUsage(t, db, userID, runningID, domain.ScanUsageKindWallet)
+	before, err := usageForScan(db, runningID)
+	if err != nil {
+		t.Fatalf("seeded ledger: %v", err)
 	}
 
-	scanA := uuid.New()
-	scanB := uuid.New()
-	for _, id := range []uuid.UUID{scanA, scanB} {
-		if err := storage.NewWalletWriter(db).OnStarted(id, userID, address); err != nil {
-			t.Fatalf("OnStarted %s: %v", id, err)
+	for _, scanID := range []uuid.UUID{missingID, runningID} {
+		if err := handler.applyCompleted(&scanCompleted{
+			ScanID: scanID, Kind: "wallet", UserID: userID, Address: address,
+			Result: walletResult(address, domain.AccountTypeEOA),
+		}); err != nil {
+			t.Fatalf("applyCompleted %s: %v", scanID, err)
 		}
 	}
 
-	richResult := &domain.ScanResult{
-		Address: address, Type: domain.AccountTypeEOA,
-		Algorithm: domain.AlgorithmECDSAsecp256k1, NISTLevel: domain.NISTLevel1,
-		KeyExposed: true, PublicKey: "0xsecret", RiskScore: 7.5,
-		Networks: []string{"ethereum"}, Connections: []string{"peer"},
+	var n int64
+	if err := db.Model(&domain.ScanResultEntity{}).Where("id = ?", missingID).Count(&n).Error; err != nil {
+		t.Fatalf("count missing scan: %v", err)
 	}
-
-	const workers = 2
-	var wg sync.WaitGroup
-	results := make([]bool, workers)
-	scanIDs := []uuid.UUID{scanA, scanB}
-
-	for i := 0; i < workers; i++ {
-		wg.Add(1)
-		go func(idx int) {
-			defer wg.Done()
-			msg := &scanCompleted{
-				ScanID: scanIDs[idx], Kind: "wallet", UserID: userID, Address: address,
-				Result: richResult,
-			}
-			entity := domain.FromScanResult(userID, richResult)
-			entity.ID = scanIDs[idx]
-			acquired, err := handler.commitWalletCompletion(msg, entity, richResult)
-			if err != nil {
-				t.Errorf("commitWalletCompletion: %v", err)
-				return
-			}
-			results[idx] = acquired
-		}(i)
+	if n != 0 {
+		t.Fatal("wallet scan.completed inserted a row")
 	}
-	wg.Wait()
-
-	var successCount int
-	for _, ok := range results {
-		if ok {
-			successCount++
-		}
-	}
-	if successCount != 1 {
-		t.Fatalf("want exactly 1 success slot, got %d (results=%v)", successCount, results)
-	}
-
-	ledgerCount, err := repository.NewScanUsageLedgerRepository(db).CountSuccessUsage(userID, domain.ScanUsageKindWallet)
-	if err != nil {
-		t.Fatalf("ledger count: %v", err)
-	}
-	if ledgerCount != 2 {
-		t.Fatalf("want ledger count 2 (seed + one success), got %d", ledgerCount)
-	}
-
-	var rows []domain.ScanResultEntity
-	if err := db.Where("user_id = ? AND id IN ?", userID, []uuid.UUID{scanA, scanB}).Find(&rows).Error; err != nil {
-		t.Fatalf("load rows: %v", err)
-	}
-	if len(rows) != 2 {
-		t.Fatalf("want 2 scan rows, got %d", len(rows))
-	}
-
-	var rich, stub int
-	for _, row := range rows {
-		switch row.Status {
-		case scan.StateSUCCESS:
-			rich++
-			if row.PublicKey == "" || row.Networks == "" || row.Networks == "[]" {
-				t.Fatalf("success row must keep rich result: %+v", row)
-			}
-		case scan.StateFAILED:
-			stub++
-			if row.Error != scan.ErrPlanLimitExceeded {
-				t.Fatalf("stub error: want %s, got %q", scan.ErrPlanLimitExceeded, row.Error)
-			}
-			if row.Address != address {
-				t.Fatalf("stub must keep address, got %q", row.Address)
-			}
-			if row.PublicKey != "" || row.KeyExposed || row.Networks != "" || row.Delegations != "" || row.Connections != "" {
-				t.Fatalf("stub must strip exploitable fields: %+v", row)
-			}
-		default:
-			t.Fatalf("unexpected status %s for scan %s", row.Status, row.ID)
-		}
-	}
-	if rich != 1 || stub != 1 {
-		t.Fatalf("want 1 rich success + 1 stub, got rich=%d stub=%d", rich, stub)
-	}
-}
-
-func TestCommitWalletCompletion_UnlimitedAlwaysRecordsLedger(t *testing.T) {
-	handler, db, userID, planID := setupQuotaCompletionTest(t)
-	if err := db.Model(&domain.Plan{}).Where("id = ?", planID).Update("wallet_scan_limit", 0).Error; err != nil {
-		t.Fatalf("set unlimited: %v", err)
-	}
-
-	scanID := uuid.New()
-	address := "0xunlimited"
-	if err := storage.NewWalletWriter(db).OnStarted(scanID, userID, address); err != nil {
-		t.Fatalf("OnStarted: %v", err)
-	}
-
-	rich := &domain.ScanResult{
-		Address: address, Type: domain.AccountTypeEOA,
-		Algorithm: domain.AlgorithmECDSAsecp256k1, NISTLevel: domain.NISTLevel1,
-		RiskScore: 1.0, Networks: []string{"ethereum"},
-	}
-	msg := &scanCompleted{
-		ScanID: scanID, Kind: "wallet", UserID: userID, Address: address, Result: rich,
-	}
-	entity := domain.FromScanResult(userID, rich)
-	entity.ID = scanID
-
-	acquired, err := handler.commitWalletCompletion(msg, entity, rich)
-	if err != nil {
-		t.Fatalf("commit: %v", err)
-	}
-	if !acquired {
-		t.Fatal("unlimited plan must accept completion")
-	}
-
-	count, err := repository.NewScanUsageLedgerRepository(db).CountSuccessUsage(userID, domain.ScanUsageKindWallet)
-	if err != nil {
-		t.Fatalf("ledger count: %v", err)
-	}
-	if count != 1 {
-		t.Fatalf("want 1 ledger row, got %d", count)
-	}
-}
-
-func TestCommitWalletCompletion_ExistingReservationConfirmsAtLimit(t *testing.T) {
-	handler, db, userID, planID := setupQuotaCompletionTest(t)
-	setPlanLimit(t, db, planID, "wallet_scan_limit", 1)
-
-	scanID := uuid.New()
-	address := "0xreserved"
-	seedUsage(t, db, userID, scanID, domain.ScanUsageKindWallet)
-	if err := storage.NewWalletWriter(db).OnStarted(scanID, userID, address); err != nil {
-		t.Fatalf("OnStarted: %v", err)
-	}
-
-	rich := walletResult(address, domain.AccountTypeEOA)
-	acquired := commitWallet(t, handler, userID, scanID, address, rich)
-	if !acquired {
-		t.Fatal("existing reservation must confirm the scan, not reject it as over limit")
-	}
-	assertUsageCount(t, db, userID, domain.ScanUsageKindWallet, 1)
-	assertWalletStatus(t, db, scanID, scan.StateSUCCESS, "")
-}
-
-func TestCommitWalletCompletion_UnknownResultKeepsReservation(t *testing.T) {
-	handler, db, userID, planID := setupQuotaCompletionTest(t)
-	setPlanLimit(t, db, planID, "wallet_scan_limit", 1)
-
-	scanID := uuid.New()
-	address := "0xunknown"
-	seedUsage(t, db, userID, scanID, domain.ScanUsageKindWallet)
-	if err := storage.NewWalletWriter(db).OnStarted(scanID, userID, address); err != nil {
-		t.Fatalf("OnStarted: %v", err)
-	}
-
-	unknown := walletResult(address, domain.AccountTypeUnknown)
-	if !commitWallet(t, handler, userID, scanID, address, unknown) {
-		t.Fatal("unknown result must keep the reserved credit")
-	}
-	if !commitWallet(t, handler, userID, scanID, address, unknown) {
-		t.Fatal("a second unknown completion must not take another credit")
-	}
-	assertUsageCount(t, db, userID, domain.ScanUsageKindWallet, 1)
-
 	var row domain.ScanResultEntity
-	if err := db.Where("id = ?", scanID).First(&row).Error; err != nil {
-		t.Fatalf("load row: %v", err)
+	if err := db.Where("id = ?", runningID).First(&row).Error; err != nil {
+		t.Fatalf("load seeded scan: %v", err)
 	}
-	if row.Status != scan.StateSUCCESS {
-		t.Fatalf("status: want %s, got %s", scan.StateSUCCESS, row.Status)
-	}
-	if row.Type != domain.AccountTypeUnknown {
-		t.Fatalf("type: want %s, got %s", domain.AccountTypeUnknown, row.Type)
-	}
-}
-
-func TestCommitWalletCompletion_TwoCompletionsOneLedgerRow(t *testing.T) {
-	handler, db, userID, planID := setupQuotaCompletionTest(t)
-	setPlanLimit(t, db, planID, "wallet_scan_limit", 1)
-
-	scanID := uuid.New()
-	address := "0xtwice"
-	if err := storage.NewWalletWriter(db).OnStarted(scanID, userID, address); err != nil {
-		t.Fatalf("OnStarted: %v", err)
-	}
-	rich := walletResult(address, domain.AccountTypeEOA)
-
-	if !commitWallet(t, handler, userID, scanID, address, rich) {
-		t.Fatal("first completion must acquire the only credit")
-	}
-	if !commitWallet(t, handler, userID, scanID, address, rich) {
-		t.Fatal("second completion of the same scan_id must confirm the existing row")
+	if row.Status != scan.StateRUNNING || row.Type != "" || row.Error != "" || row.PublicKey != "" {
+		t.Fatalf("seeded RUNNING row changed: %+v", row)
 	}
 	assertUsageCount(t, db, userID, domain.ScanUsageKindWallet, 1)
-	assertWalletStatus(t, db, scanID, scan.StateSUCCESS, "")
+	after, err := usageForScan(db, runningID)
+	if err != nil {
+		t.Fatalf("seeded ledger after completion: %v", err)
+	}
+	if after.ID != before.ID || !after.ConsumedAt.Equal(before.ConsumedAt) {
+		t.Fatalf("ledger row changed: before=%+v after=%+v", before, after)
+	}
+	if _, err := usageForScan(db, missingID); err == nil {
+		t.Fatal("wallet scan.completed acquired a ledger row")
+	}
 }
 
 func TestHandleWalletFailed_DoesNotReleaseReservation(t *testing.T) {
@@ -438,20 +268,6 @@ func tlsResult(url string) *domain.TLSScanResult {
 		ProtocolVersion: "TLS 1.3", NISTLevel: domain.NISTLevel1,
 		RiskScore: 1, PQCRisk: "high",
 	}
-}
-
-func commitWallet(t *testing.T, handler *ScanEventHandler, userID, scanID uuid.UUID, address string, result *domain.ScanResult) bool {
-	t.Helper()
-	msg := &scanCompleted{
-		ScanID: scanID, Kind: "wallet", UserID: userID, Address: address, Result: result,
-	}
-	entity := domain.FromScanResult(userID, result)
-	entity.ID = scanID
-	acquired, err := handler.commitWalletCompletion(msg, entity, result)
-	if err != nil {
-		t.Fatalf("commitWalletCompletion: %v", err)
-	}
-	return acquired
 }
 
 func commitTLS(t *testing.T, handler *ScanEventHandler, userID, scanID uuid.UUID, endpoint string, result *domain.TLSScanResult) bool {
