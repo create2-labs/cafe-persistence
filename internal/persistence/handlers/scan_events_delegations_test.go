@@ -11,8 +11,6 @@ import (
 	"cafe-persistence/pkg/nats"
 	redisconn "cafe-persistence/pkg/redis"
 
-	"github.com/create2-labs/cafe-contracts/cafenatsv01"
-	lifecycle "github.com/create2-labs/cafe-contracts/discovery/scanlifecycle/v1"
 	"github.com/google/uuid"
 	natslib "github.com/nats-io/nats.go"
 	goredis "github.com/redis/go-redis/v9"
@@ -107,18 +105,11 @@ func setupDelegationHandler(t *testing.T) (*ScanEventHandler, *gorm.DB, *memRedi
 	return h, db, cache, bus
 }
 
-func walletCacheKey(userID uuid.UUID, address string) string {
-	return "wallet:user:" + userID.String() + ":" + address
-}
-
-func publishedSubjects(bus *recordingNATS, subject string) int {
-	n := 0
-	for _, s := range bus.subjects {
-		if s == subject {
-			n++
-		}
+func assertNoWalletProjection(t *testing.T, cache *memRedis, bus *recordingNATS) {
+	t.Helper()
+	if len(cache.values) != 0 || len(bus.subjects) != 0 {
+		t.Fatalf("wallet projection redis=%v nats=%v", cache.values, bus.subjects)
 	}
-	return n
 }
 
 func TestHandleWalletCompleted_MissingDelegationsUnknownSkipsObserved(t *testing.T) {
@@ -164,40 +155,7 @@ func TestHandleWalletCompleted_MissingDelegationsUnknownSkipsObserved(t *testing
 	if stored.Algorithm != "" || stored.IsEOA || stored.NISTLevel != 0 {
 		t.Fatalf("posture stored = %+v", stored)
 	}
-
-	raw, ok := cache.values[walletCacheKey(userID, address)]
-	if !ok {
-		t.Fatal("redis wallet result missing")
-	}
-	var cached domain.ScanResult
-	if err := json.Unmarshal([]byte(raw), &cached); err != nil {
-		t.Fatalf("redis json: %v", err)
-	}
-	if cached.Delegations == nil || len(cached.Delegations) != 0 {
-		t.Fatalf("redis delegations = %#v", cached.Delegations)
-	}
-	if cached.Type != domain.AccountTypeUnknown {
-		t.Fatalf("redis type = %q", cached.Type)
-	}
-	if publishedSubjects(bus, cafenatsv01.NATSSubjectDiscoveryWalletObservedV01) != 0 {
-		t.Fatalf("wallet.observed published: %v", bus.subjects)
-	}
-	if publishedSubjects(bus, lifecycle.SubjectScanReady) != 1 {
-		t.Fatalf("scan.ready count, subjects=%v", bus.subjects)
-	}
-	var readyBody []byte
-	for i, subject := range bus.subjects {
-		if subject == lifecycle.SubjectScanReady {
-			readyBody = bus.payloads[i]
-		}
-	}
-	ready, err := lifecycle.DecodeReady(readyBody)
-	if err != nil {
-		t.Fatalf("scan.ready: %v", err)
-	}
-	if ready.UserID != userID.String() || ready.Kind != "wallet" || ready.Address != address || ready.Status != "success" {
-		t.Fatalf("scan.ready = %+v", ready)
-	}
+	assertNoWalletProjection(t, cache, bus)
 }
 
 func TestHandleWalletCompleted_DelegationsRoundTripAndEOAObserved(t *testing.T) {
@@ -240,41 +198,11 @@ func TestHandleWalletCompleted_DelegationsRoundTripAndEOAObserved(t *testing.T) 
 	if len(out.Delegations) != 1 || out.Delegations[0].ChainID != 1 || out.Delegations[0].DelegatedAddress != target {
 		t.Fatalf("postgres delegations = %#v raw=%s", out.Delegations, stored.Delegations)
 	}
-
-	raw := cache.values[walletCacheKey(userID, address)]
-	var cached domain.ScanResult
-	if err := json.Unmarshal([]byte(raw), &cached); err != nil {
-		t.Fatal(err)
-	}
-	if len(cached.Delegations) != 1 || cached.Delegations[0].DelegatedAddress != target {
-		t.Fatalf("redis delegations = %#v", cached.Delegations)
-	}
-
-	if publishedSubjects(bus, cafenatsv01.NATSSubjectDiscoveryWalletObservedV01) != 1 {
-		t.Fatalf("subjects=%v", bus.subjects)
-	}
-	var ev struct {
-		Payload struct {
-			AccountKind      string `json:"account_kind"`
-			CurrentAlgorithm string `json:"current_algorithm"`
-		} `json:"payload"`
-	}
-	var observed []byte
-	for i, subject := range bus.subjects {
-		if subject == cafenatsv01.NATSSubjectDiscoveryWalletObservedV01 {
-			observed = bus.payloads[i]
-		}
-	}
-	if err := json.Unmarshal(observed, &ev); err != nil {
-		t.Fatal(err)
-	}
-	if ev.Payload.AccountKind != "eoa" || ev.Payload.CurrentAlgorithm != "secp256k1_ecrecover" {
-		t.Fatalf("observed payload = %+v", ev.Payload)
-	}
+	assertNoWalletProjection(t, cache, bus)
 }
 
 func TestHandleWalletCompleted_LegacyAAStillDecoded(t *testing.T) {
-	h, db, _, bus := setupDelegationHandler(t)
+	h, db, cache, bus := setupDelegationHandler(t)
 	userID := uuid.New()
 	scanID := uuid.New()
 	address := "0xabc0000000000000000000000000000000000003"
@@ -312,8 +240,23 @@ func TestHandleWalletCompleted_LegacyAAStillDecoded(t *testing.T) {
 	if stored.Delegations != "[]" {
 		t.Fatalf("delegations = %q", stored.Delegations)
 	}
-	if publishedSubjects(bus, cafenatsv01.NATSSubjectDiscoveryWalletObservedV01) != 1 {
-		t.Fatalf("legacy AA must still publish wallet.observed, subjects=%v", bus.subjects)
+	assertNoWalletProjection(t, cache, bus)
+}
+
+func TestWalletStartedDoesNotInsert(t *testing.T) {
+	h, db, _, _ := setupDelegationHandler(t)
+	scanID := uuid.New()
+	if err := h.applyStarted(&scanStarted{
+		ScanID: scanID, Kind: "wallet", UserID: uuid.New(), Address: "0xabc",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var n int64
+	if err := db.Model(&domain.ScanResultEntity{}).Where("id = ?", scanID).Count(&n).Error; err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatal("scan.started inserted a wallet row")
 	}
 }
 

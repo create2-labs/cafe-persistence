@@ -9,11 +9,9 @@ import (
 	"cafe-persistence/internal/persistence/planlimit"
 	"cafe-persistence/internal/persistence/storage"
 	"cafe-persistence/internal/repository"
-	"cafe-persistence/internal/walletobservation"
 	"cafe-persistence/pkg/nats"
 	"cafe-persistence/pkg/scan"
 
-	"github.com/create2-labs/cafe-contracts/cafenatsv01"
 	lifecycle "github.com/create2-labs/cafe-contracts/discovery/scanlifecycle/v1"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
@@ -21,14 +19,13 @@ import (
 )
 
 type ScanEventHandler struct {
-	tlsWriter         *storage.TLSWriter
-	walletWriter      *storage.WalletWriter
-	redisCache        *storage.RedisCache
-	natsConn          nats.Connection  // optional: when set, publish scan.ready after writing to Redis so API can return result on GET
-	chainIDsByNetwork map[string]int64 // blockchains[].name → chain_id; optional, from config.ChainConfig.ChainIDByNetwork()
-	db                *gorm.DB
-	ledger            repository.ScanUsageLedgerRepository
-	planLimits        *planlimit.Resolver
+	tlsWriter    *storage.TLSWriter
+	walletWriter *storage.WalletWriter
+	redisCache   *storage.RedisCache
+	natsConn     nats.Connection // optional: when set, publish scan.ready after writing to Redis so API can return result on GET
+	db           *gorm.DB
+	ledger       repository.ScanUsageLedgerRepository
+	planLimits   *planlimit.Resolver
 }
 
 const IGNORE_SCAN_MSG = "unknown scan kind, ignoring"
@@ -43,15 +40,17 @@ func NewScanEventHandler(
 	ledger repository.ScanUsageLedgerRepository,
 	planLimits *planlimit.Resolver,
 ) *ScanEventHandler {
+	// Wallet scan.ready and wallet.observed are no longer published from NATS.
+	// The chain map stays in the signature so existing callers do not change.
+	_ = chainIDsByNetwork
 	return &ScanEventHandler{
-		tlsWriter:         tlsWriter,
-		walletWriter:      walletWriter,
-		redisCache:        redisCache,
-		natsConn:          natsConn,
-		chainIDsByNetwork: chainIDsByNetwork,
-		db:                db,
-		ledger:            ledger,
-		planLimits:        planLimits,
+		tlsWriter:    tlsWriter,
+		walletWriter: walletWriter,
+		redisCache:   redisCache,
+		natsConn:     natsConn,
+		db:           db,
+		ledger:       ledger,
+		planLimits:   planLimits,
 	}
 }
 
@@ -74,10 +73,7 @@ func (h *ScanEventHandler) applyStarted(msg *scanStarted) error {
 			return err
 		}
 	case "wallet":
-		if err := h.walletWriter.OnStarted(msg.ScanID, msg.UserID, msg.Address); err != nil {
-			log.Error().Err(err).Str("scan_id", msg.ScanID.String()).Msg("persistence: OnStarted wallet failed")
-			return err
-		}
+		ignoreWalletLifecycle(msg.ScanID)
 	default:
 		log.Warn().Str("kind", msg.Kind).Msg(IGNORE_SCAN_MSG)
 	}
@@ -98,7 +94,7 @@ func (h *ScanEventHandler) applyCompleted(msg *scanCompleted) error {
 	case "tls":
 		return h.handleTLSCompleted(ctx, msg)
 	case "wallet":
-		return h.handleWalletCompleted(ctx, msg)
+		return h.handleWalletCompleted(msg)
 	default:
 		log.Warn().Str("kind", msg.Kind).Msg(IGNORE_SCAN_MSG)
 		return nil
@@ -150,7 +146,7 @@ func (h *ScanEventHandler) handleTLSCompleted(ctx context.Context, msg *scanComp
 	return nil
 }
 
-func (h *ScanEventHandler) handleWalletCompleted(ctx context.Context, msg *scanCompleted) error {
+func (h *ScanEventHandler) handleWalletCompleted(msg *scanCompleted) error {
 	log.Debug().
 		Str("scan_id", msg.ScanID.String()).
 		Str("user_id", msg.UserID.String()).
@@ -197,55 +193,19 @@ func (h *ScanEventHandler) handleWalletCompleted(ctx context.Context, msg *scanC
 			Str("user_id", msg.UserID.String()).
 			Str("address", msg.Address).
 			Msg("persistence: wallet completion rejected (plan limit exceeded), stub persisted")
-		h.publishScanReady(msg.UserID, "wallet", "", msg.Address, "failed")
 		return nil
 	}
 	log.Info().
 		Str("scan_id", msg.ScanID.String()).
 		Str("address", msg.Address).
 		Msg("persistence: wallet Postgres write OK")
-	if err := h.redisCache.SaveWalletScan(ctx, msg.UserID, msg.Address, &result); err != nil {
-		log.Error().Err(err).Str("scan_id", msg.ScanID.String()).Msg("persistence: Redis wallet write failed")
-		return err
-	}
-	log.Info().
-		Str("scan_id", msg.ScanID.String()).
-		Str("address", msg.Address).
-		Str("user_id", msg.UserID.String()).
-		Msg("persistence: wallet Redis write OK")
-	h.publishScanReady(msg.UserID, "wallet", "", msg.Address, "success")
-	h.publishWalletObserved(msg, &result)
 	return nil
 }
 
-// publishWalletObserved emits cafe.discovery.wallet.observed v0.1 JSON (informational observation on the bus).
-// It is not a command and must not be treated by CPM as an implicit assessment trigger — see cafe_cpm_v1_prompts_0.7.md (policy.assessment.requested is the canonical trigger).
-// Best-effort; does not fail the scan write path.
-func (h *ScanEventHandler) publishWalletObserved(msg *scanCompleted, result *domain.ScanResult) {
-	if h.natsConn == nil {
-		return
-	}
-	meta := walletobservation.ExportMetaForScanJob(msg.ScanID)
-	ev := walletobservation.ToWalletObservedEvent(meta, result, h.chainIDsByNetwork)
-	if err := ev.Validate(); err != nil {
-		if result != nil && result.Algorithm == "" {
-			log.Info().
-				Str("scan_id", msg.ScanID.String()).
-				Msg("persistence: wallet.observed skipped (empty algorithm)")
-			return
-		}
-		log.Error().Err(err).Str("scan_id", msg.ScanID.String()).Msg("persistence: wallet.observed export validation failed")
-		return
-	}
-	if err := nats.PublishJSON(h.natsConn, cafenatsv01.NATSSubjectDiscoveryWalletObservedV01, &ev); err != nil {
-		log.Error().Err(err).Str("subject", cafenatsv01.NATSSubjectDiscoveryWalletObservedV01).Msg("persistence: wallet.observed publish failed")
-		return
-	}
+func ignoreWalletLifecycle(scanID uuid.UUID) {
 	log.Info().
-		Str("subject", cafenatsv01.NATSSubjectDiscoveryWalletObservedV01).
-		Str("scan_id", msg.ScanID.String()).
-		Str("event_id", ev.EventID).
-		Msg("NATS → PUB cafe.discovery.wallet.observed v0.1")
+		Str("scan_id", scanID.String()).
+		Msg("persistence: wallet event ignored; ApplyWalletTransition owns wallet state")
 }
 
 func (h *ScanEventHandler) decodeResult(in interface{}, out interface{}) error {
@@ -396,7 +356,8 @@ func (h *ScanEventHandler) applyFailed(msg *scanFailed) error {
 	case "tls":
 		return h.handleTLSFailed(ctx, msg)
 	case "wallet":
-		return h.handleWalletFailed(ctx, msg)
+		ignoreWalletLifecycle(msg.ScanID)
+		return nil
 	default:
 		log.Warn().Str("kind", msg.Kind).Msg(IGNORE_SCAN_MSG)
 		return nil
@@ -437,50 +398,6 @@ func (h *ScanEventHandler) handleTLSFailed(ctx context.Context, msg *scanFailed)
 	}
 	h.publishScanReady(msg.UserID, "tls", msg.Endpoint, "", "failed")
 	return nil
-}
-
-func (h *ScanEventHandler) handleWalletFailed(ctx context.Context, msg *scanFailed) error {
-	current, err := h.walletWriter.GetStatus(msg.ScanID)
-	if err != nil {
-		log.Error().Err(err).Str("scan_id", msg.ScanID.String()).Msg("persistence: GetStatus failed")
-		return err
-	}
-	if current == "" {
-		log.Warn().
-			Str("scan_id", msg.ScanID.String()).
-			Str("subject", lifecycle.SubjectScanFailed).
-			Msg("persistence: missing scan on failed (no row yet), will insert")
-	} else if !scan.ValidTransition(current, scan.StateFAILED) {
-		log.Warn().
-			Str("scan_id", msg.ScanID.String()).
-			Str("current_status", current).
-			Str("attempted_status", scan.StateFAILED).
-			Str("subject", lifecycle.SubjectScanFailed).
-			Msg("persistence: invalid transition, ignoring")
-		return nil
-	}
-	if err := h.persistWalletFailure(msg.ScanID, msg.UserID, msg.Address, msg.Error); err != nil {
-		log.Error().Err(err).Str("scan_id", msg.ScanID.String()).Msg("persistence: OnFailed wallet failed")
-		return err
-	}
-	if err := h.redisCache.SaveWalletFailure(ctx, msg.UserID, msg.Address, msg.Error); err != nil {
-		log.Error().Err(err).Str("scan_id", msg.ScanID.String()).Msg("persistence: Redis wallet failure write failed")
-		return err
-	}
-	h.publishScanReady(msg.UserID, "wallet", "", msg.Address, "failed")
-	return nil
-}
-
-func (h *ScanEventHandler) persistWalletFailure(scanID, userID uuid.UUID, address, errMsg string) error {
-	if h.db == nil || h.ledger == nil {
-		return h.walletWriter.OnFailed(scanID, userID, address, errMsg)
-	}
-	return h.db.Transaction(func(tx *gorm.DB) error {
-		if err := h.walletWriter.OnFailedInTx(tx, scanID, userID, address, errMsg); err != nil {
-			return err
-		}
-		return h.ledger.ReleaseSuccessUsageByScanIDInTx(tx, scanID)
-	})
 }
 
 func (h *ScanEventHandler) persistTLSFailure(scanID uuid.UUID, userID *uuid.UUID, url, errMsg string) error {
