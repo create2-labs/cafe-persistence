@@ -285,10 +285,13 @@ func TestCommitWalletCompletion_TwoCompletionsOneLedgerRow(t *testing.T) {
 	assertWalletStatus(t, db, scanID, scan.StateSUCCESS, "")
 }
 
-func TestHandleWalletFailed_ReleasesReservation(t *testing.T) {
+func TestHandleWalletFailed_DoesNotReleaseReservation(t *testing.T) {
 	handler, db, userID, planID := setupQuotaCompletionTest(t)
 	setPlanLimit(t, db, planID, "wallet_scan_limit", 1)
-	handler.redisCache = storage.NewRedisCache(&memRedis{values: map[string]string{}})
+	cache := &memRedis{values: map[string]string{}}
+	bus := &recordingNATS{}
+	handler.redisCache = storage.NewRedisCache(cache)
+	handler.natsConn = bus
 
 	scanID := uuid.New()
 	otherID := uuid.New()
@@ -305,14 +308,17 @@ func TestHandleWalletFailed_ReleasesReservation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("applyFailed: %v", err)
 	}
-	assertUsageCount(t, db, userID, domain.ScanUsageKindWallet, 1)
-	if _, err := usageForScan(db, scanID); err == nil {
-		t.Fatal("failed scan must drop its ledger row")
+	assertUsageCount(t, db, userID, domain.ScanUsageKindWallet, 2)
+	if _, err := usageForScan(db, scanID); err != nil {
+		t.Fatalf("wallet scan.failed must keep the reservation: %v", err)
 	}
 	if _, err := usageForScan(db, otherID); err != nil {
 		t.Fatalf("other reservation must stay: %v", err)
 	}
-	assertWalletStatus(t, db, scanID, scan.StateFAILED, "rpc down")
+	assertWalletStatus(t, db, scanID, scan.StateRUNNING, "")
+	if len(cache.values) != 0 || len(bus.subjects) != 0 {
+		t.Fatalf("wallet projection redis=%v nats=%v", cache.values, bus.subjects)
+	}
 }
 
 func TestHandleWalletFailed_AfterSuccessKeepsUsage(t *testing.T) {
