@@ -2,16 +2,17 @@
 
 Data-plane persistence service for the CAFE stack.
 
-Extracted from `cafe-discovery` as part of **PERS-D1** — mechanical scan persistence extraction. Behaviour is identical to `cmd/persistence` in Discovery today; production deploy is unchanged until **PERS-D2**.
+Extracted from `cafe-discovery`. The running binary is `cmd/persistence`. Discovery keeps `cmd/server` only.
 
 ## Role
 
 - **Single writer** for scan lifecycle events (`scan.started`, `scan.completed`, `scan.failed`)
 - **Owner DDL** for `scan_results`, `tls_scan_results`, `scan_usage_events`
 - Writes to **Postgres** and **Redis**; publishes `persistence.ready` on **NATS**
-- Consumes NATS subjects `scan.*` (same contract as Discovery persistence)
+- Consumes NATS subjects `scan.*`
+- **Internal CP API** `internal/cp/v1` for crypto-policy rows (CPM calls this; there is no public `/drafts*`)
 
-Non-objectifs (PERS-D1) : pas de module CP, pas d'API HTTP publique, pas de migration DDL identity (`users`, `plans`).
+There is no public HTTP API and no identity DDL (`users`, `plans`).
 
 ## Build
 
@@ -366,6 +367,4 @@ Published as `oleglod/cafe-persistence:<tag>` :
 
 ## Rollback (PERS-D1)
 
-Cette PR n'active rien en stack. `cafe-discovery` conserve `cmd/persistence` jusqu'à **PERS-D2** validé, puis suppression en **PERS-D1b**.
-
-Rollback opérationnel = ne pas merger D2 ; image legacy `oleglod/cafe-discovery-persistence` reste buildable depuis Discovery.
+`cafe-discovery` ne contient plus `cmd/persistence`. Le service déployé est l'image `oleglod/cafe-persistence`. Le retour arrière compose est décrit dans [cafe-discovery `docs/PERSISTENCE_EXTRACTION.md`](https://github.com/create2-labs/cafe-discovery/blob/main/docs/PERSISTENCE_EXTRACTION.md).
