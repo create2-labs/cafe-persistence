@@ -1,6 +1,6 @@
 module cafe-persistence
 
-go 1.27.2
+go 1.27.3
 
 require (
 	github.com/create2-labs/cafe-contracts v0.1.1-0.20261012104448-124da4806261
