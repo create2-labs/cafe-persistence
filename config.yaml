@@ -9,6 +9,4 @@ REDIS_URL: "redis://redis:6379"
 LOG_LEVEL: "info"
 blockchains:
   - name: ethereum-mainnet
-    rpc: "https://ethereum-rpc.publicnode.com"
-    moralis_chain_name: "eth"
     chain_id: 1

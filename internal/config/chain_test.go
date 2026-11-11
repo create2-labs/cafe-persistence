@@ -86,6 +86,29 @@ func TestLoadChainConfig_repoConfigYAML(t *testing.T) {
 	}
 }
 
+func TestLoadChainConfigIgnoresUnreadKeys(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	content := `blockchains:
+  - name: ethereum-mainnet
+    chain_id: 1
+    rpc: "https://rpc.example.invalid"
+    moralis_chain_name: "eth"
+    supports_eip7702: true
+`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadChainConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.ChainIDByNetwork()["ethereum-mainnet"]; got != 1 {
+		t.Fatalf("unexpected mapping: %#v", cfg.ChainIDByNetwork())
+	}
+}
+
 func TestChainConfig_ChainIDByNetwork(t *testing.T) {
 	t.Parallel()
 	c := &ChainConfig{

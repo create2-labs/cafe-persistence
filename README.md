@@ -53,7 +53,7 @@ Environment variables (or `config.yaml` via `CONFIG_PATH`):
 |----------|---------|
 | `POSTGRES_HOST` | `127.0.0.1` |
 | `POSTGRES_PORT` | `5432` |
-| `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DATABASE` | `cafe` |
+| `POSTGRES_USER` / `POSTGRES_DATABASE` | `cafe` |
 | `POSTGRES_SSLMODE` | `disable` |
 | `NATS_URL` | `nats://localhost:4222` |
 | `REDIS_URL` | `redis://localhost:6379` |
