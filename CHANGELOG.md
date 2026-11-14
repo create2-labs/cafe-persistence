@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.2.1](https://github.com/create2-labs/cafe-persistence/compare/v2.2.0...v2.2.1) (2026-11-14)
+
+
+### Bug Fixes
+
+* upgrade to go 1.27.4 to solve GO-2026-6859 ([b5f9dc3](https://github.com/create2-labs/cafe-persistence/commit/b5f9dc3c130fcebe4df4d6b9572fc22a2b6664a5))
+
 ## [2.2.0](https://github.com/create2-labs/cafe-persistence/compare/v2.1.0...v2.2.0) (2026-11-02)
 
 
