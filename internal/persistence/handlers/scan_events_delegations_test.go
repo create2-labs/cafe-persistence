@@ -97,7 +97,6 @@ func setupDelegationHandler(t *testing.T) (*ScanEventHandler, *gorm.DB, *memRedi
 	bus := &recordingNATS{}
 	h := NewScanEventHandler(
 		nil,
-		storage.NewWalletWriter(db),
 		storage.NewRedisCache(cache),
 		bus,
 		map[string]int64{"ethereum-mainnet": 1},
@@ -130,9 +129,7 @@ func TestHandleWalletCompleted_MissingDelegationsUnknownSkipsObserved(t *testing
 	userID := uuid.New()
 	scanID := uuid.New()
 	address := "0xabc0000000000000000000000000000000000001"
-	if err := storage.NewWalletWriter(db).OnStarted(scanID, userID, address); err != nil {
-		t.Fatalf("OnStarted: %v", err)
-	}
+	seedRunningWallet(t, db, scanID, userID, address)
 
 	err := h.applyCompleted(&scanCompleted{
 		ScanID:  scanID,
@@ -163,9 +160,7 @@ func TestHandleWalletCompleted_DelegationsRoundTripAndEOAObserved(t *testing.T) 
 	scanID := uuid.New()
 	address := "0xabc0000000000000000000000000000000000002"
 	target := "0x1111111111111111111111111111111111111111"
-	if err := storage.NewWalletWriter(db).OnStarted(scanID, userID, address); err != nil {
-		t.Fatalf("OnStarted: %v", err)
-	}
+	seedRunningWallet(t, db, scanID, userID, address)
 
 	err := h.applyCompleted(&scanCompleted{
 		ScanID:  scanID,
@@ -196,9 +191,7 @@ func TestHandleWalletCompleted_LegacyAAStillDecoded(t *testing.T) {
 	userID := uuid.New()
 	scanID := uuid.New()
 	address := "0xabc0000000000000000000000000000000000003"
-	if err := storage.NewWalletWriter(db).OnStarted(scanID, userID, address); err != nil {
-		t.Fatalf("OnStarted: %v", err)
-	}
+	seedRunningWallet(t, db, scanID, userID, address)
 
 	err := h.applyCompleted(&scanCompleted{
 		ScanID:  scanID,

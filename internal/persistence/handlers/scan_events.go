@@ -31,7 +31,6 @@ const IGNORE_SCAN_MSG = "unknown scan kind, ignoring"
 
 func NewScanEventHandler(
 	tlsWriter *storage.TLSWriter,
-	walletWriter *storage.WalletWriter,
 	redisCache *storage.RedisCache,
 	natsConn nats.Connection,
 	chainIDsByNetwork map[string]int64,
@@ -39,9 +38,8 @@ func NewScanEventHandler(
 	ledger repository.ScanUsageLedgerRepository,
 	planLimits *planlimit.Resolver,
 ) *ScanEventHandler {
-	// Wallet NATS no longer writes or publishes. These parameters stay so existing callers do not change.
+	// Wallet NATS no longer writes or publishes. This parameter stays so existing callers do not change.
 	_ = chainIDsByNetwork
-	_ = walletWriter
 	return &ScanEventHandler{
 		tlsWriter:  tlsWriter,
 		redisCache: redisCache,

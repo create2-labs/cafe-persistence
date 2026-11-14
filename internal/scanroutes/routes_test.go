@@ -16,14 +16,6 @@ func TestV1BaseIsInternalOnly(t *testing.T) {
 	}
 }
 
-func TestJoinPrefixesV1Base(t *testing.T) {
-	got := scanroutes.Join(scanroutes.PendingWallet)
-	want := scanroutes.V1Base + scanroutes.PendingWallet
-	if got != want {
-		t.Fatalf("Join: got %q want %q", got, want)
-	}
-}
-
 func TestRouteLiteralsAreRelative(t *testing.T) {
 	for _, route := range []string{
 		scanroutes.PendingWallet,

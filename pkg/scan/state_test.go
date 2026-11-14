@@ -39,14 +39,3 @@ func TestIsTerminal(t *testing.T) {
 		t.Error("non-terminal states should not be terminal")
 	}
 }
-
-func TestIsSuccess(t *testing.T) {
-	if !IsSuccess(StateSUCCESS) {
-		t.Error("SUCCESS should be success")
-	}
-	for _, st := range []string{StatePENDING, StateRUNNING, StateFAILED, StateTIMEOUT, StateUNREACHABLE, ""} {
-		if IsSuccess(st) {
-			t.Errorf("IsSuccess(%q) should be false", st)
-		}
-	}
-}

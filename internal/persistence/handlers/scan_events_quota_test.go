@@ -14,6 +14,17 @@ import (
 	"gorm.io/gorm"
 )
 
+// seedRunningWallet creates a RUNNING wallet row for a new scan_id.
+func seedRunningWallet(t *testing.T, db *gorm.DB, scanID, userID uuid.UUID, address string) {
+	t.Helper()
+	ent := &domain.ScanResultEntity{
+		ID: scanID, UserID: userID, Address: address, Status: scan.StateRUNNING,
+	}
+	if err := db.Create(ent).Error; err != nil {
+		t.Fatalf("seed running wallet: %v", err)
+	}
+}
+
 func setupQuotaCompletionTest(t *testing.T) (*ScanEventHandler, *gorm.DB, uuid.UUID, uuid.UUID) {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file:"+uuid.New().String()+"?mode=memory&cache=shared&_txlock=immediate"), &gorm.Config{})
@@ -51,10 +62,8 @@ func setupQuotaCompletionTest(t *testing.T) (*ScanEventHandler, *gorm.DB, uuid.U
 
 	ledger := repository.NewScanUsageLedgerRepository(db)
 	limits := planlimit.NewResolver(repository.NewUserRepository(db), repository.NewPlanRepository(db))
-	walletWriter := storage.NewWalletWriter(db)
 	handler := NewScanEventHandler(
 		storage.NewTLSWriter(db),
-		walletWriter,
 		nil,
 		nil,
 		nil,
@@ -70,9 +79,7 @@ func TestApplyCompleted_WalletDoesNotWriteScanOrLedger(t *testing.T) {
 	address := "0xignored"
 	missingID := uuid.New()
 	runningID := uuid.New()
-	if err := storage.NewWalletWriter(db).OnStarted(runningID, userID, address); err != nil {
-		t.Fatalf("OnStarted: %v", err)
-	}
+	seedRunningWallet(t, db, runningID, userID, address)
 	seedUsage(t, db, userID, runningID, domain.ScanUsageKindWallet)
 	before, err := usageForScan(db, runningID)
 	if err != nil {
@@ -128,9 +135,7 @@ func TestHandleWalletFailed_DoesNotReleaseReservation(t *testing.T) {
 	address := "0xnoreult"
 	seedUsage(t, db, userID, scanID, domain.ScanUsageKindWallet)
 	seedUsage(t, db, userID, otherID, domain.ScanUsageKindWallet)
-	if err := storage.NewWalletWriter(db).OnStarted(scanID, userID, address); err != nil {
-		t.Fatalf("OnStarted: %v", err)
-	}
+	seedRunningWallet(t, db, scanID, userID, address)
 
 	err := handler.applyFailed(&scanFailed{
 		ScanID: scanID, Kind: "wallet", UserID: userID, Address: address, Error: "rpc down",
