@@ -43,13 +43,6 @@ func RegisterRoutes(mux *http.ServeMux, h *Handler) {
 	register("GET", scanroutes.LedgerUsage, h.GetScanLedgerUsage)
 }
 
-// NewServer registers scan routes on host:port.
-func NewServer(host, port string, serviceToken string, h *Handler) *Server {
-	mux := http.NewServeMux()
-	RegisterRoutes(mux, h)
-	return NewServerFromMux(host, port, serviceToken, mux)
-}
-
 // NewServerFromMux serves a pre-built mux (scan + CP routes) on host:port.
 func NewServerFromMux(host, port string, serviceToken string, mux *http.ServeMux) *Server {
 	addr := fmt.Sprintf("%s:%s", host, port)
@@ -75,9 +68,4 @@ func (s *Server) Start() {
 // Shutdown stops the HTTP server gracefully.
 func (s *Server) Shutdown(ctx context.Context) error {
 	return s.srv.Shutdown(ctx)
-}
-
-// HTTPHandler exposes the root handler (auth + routes) for contract tests.
-func (s *Server) HTTPHandler() http.Handler {
-	return s.srv.Handler
 }

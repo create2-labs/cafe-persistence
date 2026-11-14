@@ -12,8 +12,3 @@ const (
 	ReferenceWallet = "/references/wallet"
 	ReferenceScan   = "/references/scan"
 )
-
-// Join returns the absolute mux path for a V1-relative route.
-func Join(relative string) string {
-	return V1Base + relative
-}

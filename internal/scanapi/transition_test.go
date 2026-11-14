@@ -41,12 +41,11 @@ func startTransitionAPI(t *testing.T, db *gorm.DB) *httptest.Server {
 		&config.ChainConfig{},
 	)
 	h.EnableWalletTransition(db)
-	srv := NewServer("127.0.0.1", "0", testServiceToken, h)
-	return httptest.NewServer(srv.HTTPHandler())
+	return httptest.NewServer(authedRoutes(h))
 }
 
 func transitionURL(base string, scanID uuid.UUID) string {
-	url := base + scanroutes.Join(scanroutes.WalletScanTransition)
+	url := base + scanroutes.V1Base + scanroutes.WalletScanTransition
 	return strings.Replace(url, "{scan_id}", scanID.String(), 1)
 }
 
@@ -415,7 +414,7 @@ func startProjectedAPI(t *testing.T, cache *transitionRedis, bus *transitionBus)
 	)
 	h.EnableWalletTransition(db)
 	h.EnableWalletEvents(bus)
-	return httptest.NewServer(NewServer("127.0.0.1", "0", testServiceToken, h).HTTPHandler()), db
+	return httptest.NewServer(authedRoutes(h)), db
 }
 
 func walletCacheKey(user uuid.UUID) string {

@@ -99,7 +99,6 @@ func main() {
 
 	// Storage and handlers
 	tlsWriter := persistenceStorage.NewTLSWriter(db.GetDB())
-	walletWriter := persistenceStorage.NewWalletWriter(db.GetDB())
 	cache := persistenceStorage.NewRedisCache(redis)
 	ledgerRepo := repository.NewScanUsageLedgerRepository(db.GetDB())
 	planLimits := planlimit.NewResolver(
@@ -107,7 +106,7 @@ func main() {
 		repository.NewPlanRepository(db.GetDB()),
 	)
 	scanHandler := handlers.NewScanEventHandler(
-		tlsWriter, walletWriter, cache, nc, cfgChain.ChainIDByNetwork(),
+		tlsWriter, cache, nc, cfgChain.ChainIDByNetwork(),
 		db.GetDB(), ledgerRepo, planLimits,
 	)
 

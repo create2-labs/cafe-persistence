@@ -51,8 +51,7 @@ func newTestCPAPIServer(t *testing.T, db *gorm.DB) *httptest.Server {
 	mux := http.NewServeMux()
 	cpapiHandler := NewHandler(cpstore.NewPostgresStore(db))
 	RegisterRoutes(mux, cpapiHandler)
-	srv := scanapi.NewServerFromMux("127.0.0.1", "0", testServiceToken, mux)
-	return httptest.NewServer(srv.HTTPHandler())
+	return httptest.NewServer(scanapi.ServiceAuthMiddleware(testServiceToken, mux))
 }
 
 func cpURL(base, rel string) string {

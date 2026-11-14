@@ -11,7 +11,7 @@ import (
 	"gorm.io/gorm"
 )
 
-func setupWalletWriterTestDB(t *testing.T) *WalletWriter {
+func setupScanResultTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
 	if err != nil {
@@ -20,7 +20,7 @@ func setupWalletWriterTestDB(t *testing.T) *WalletWriter {
 	if err := db.AutoMigrate(&domain.ScanResultEntity{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	return NewWalletWriter(db)
+	return db
 }
 
 func setupTLSWriterTestDB(t *testing.T) *TLSWriter {
@@ -33,74 +33,6 @@ func setupTLSWriterTestDB(t *testing.T) *TLSWriter {
 		t.Fatalf("migrate: %v", err)
 	}
 	return NewTLSWriter(db)
-}
-
-func TestWalletWriter_OnStartedIdempotentByScanID(t *testing.T) {
-	w := setupWalletWriterTestDB(t)
-	userID := uuid.New()
-	scanID := uuid.New()
-	address := "0xdef"
-
-	if err := w.OnStarted(scanID, userID, address); err != nil {
-		t.Fatalf("first OnStarted: %v", err)
-	}
-	if err := w.OnStarted(scanID, userID, address); err != nil {
-		t.Fatalf("second OnStarted: %v", err)
-	}
-
-	var count int64
-	if err := w.db.Model(&domain.ScanResultEntity{}).Where("id = ?", scanID).Count(&count).Error; err != nil {
-		t.Fatalf("count: %v", err)
-	}
-	if count != 1 {
-		t.Fatalf("want 1 row after duplicate start, got %d", count)
-	}
-}
-
-func TestWalletWriter_OnStartedInsertsLifecycleFieldsOnly(t *testing.T) {
-	w := setupWalletWriterTestDB(t)
-	userID := uuid.New()
-	scanID := uuid.New()
-	address := "0xlifecycle"
-
-	if err := w.OnStarted(scanID, userID, address); err != nil {
-		t.Fatalf("OnStarted: %v", err)
-	}
-
-	var stored domain.ScanResultEntity
-	if err := w.db.Where("id = ?", scanID).First(&stored).Error; err != nil {
-		t.Fatalf("load row: %v", err)
-	}
-	if stored.UserID != userID {
-		t.Fatalf("user_id = %v, want %v", stored.UserID, userID)
-	}
-	if stored.Address != address {
-		t.Fatalf("address = %q, want %q", stored.Address, address)
-	}
-	if stored.Status != scan.StateRUNNING {
-		t.Fatalf("status = %q, want %q", stored.Status, scan.StateRUNNING)
-	}
-	if stored.Type != "" {
-		t.Fatalf("type = %q, want empty before scan.completed", stored.Type)
-	}
-	if stored.Algorithm != "" {
-		t.Fatalf("algorithm = %q, want empty before scan.completed", stored.Algorithm)
-	}
-	if stored.IsEOA {
-		t.Fatal("is_eoa must not be true before scan.completed")
-	}
-	if stored.NISTLevel != 0 {
-		t.Fatalf("nist_level = %v, want zero before scan.completed", stored.NISTLevel)
-	}
-	if stored.RiskScore != 0 {
-		t.Fatalf("risk_score = %v, want zero before scan.completed", stored.RiskScore)
-	}
-	if stored.Networks != "" {
-		t.Fatalf("networks = %q, want empty before scan.completed", stored.Networks)
-	}
-	if stored.PublicKeyRecovery != "" {
-		t.Fatalf("public_key_recovery = %q, want empty before scan.completed", stored.PublicKeyRecovery)
-	}
 }
 
 func TestTLSWriter_OnStartedInsertsLifecycleFieldsOnly(t *testing.T) {
@@ -140,23 +72,23 @@ func TestTLSWriter_OnStartedInsertsLifecycleFieldsOnly(t *testing.T) {
 	}
 }
 
-func TestWalletWriter_AccidentalInsertWithoutStatusNotRunning(t *testing.T) {
-	w := setupWalletWriterTestDB(t)
+func TestScanResultEntity_AccidentalInsertWithoutStatusNotRunning(t *testing.T) {
+	db := setupScanResultTestDB(t)
 	userID := uuid.New()
 	scanID := uuid.New()
 	address := "0xaccidental"
 
 	ent := &domain.ScanResultEntity{ID: scanID, UserID: userID, Address: address}
-	if err := w.db.Create(ent).Error; err != nil {
+	if err := db.Create(ent).Error; err != nil {
 		t.Fatalf("Create without status: %v", err)
 	}
 
-	status, err := w.GetStatus(scanID)
-	if err != nil {
-		t.Fatalf("GetStatus: %v", err)
+	var stored domain.ScanResultEntity
+	if err := db.Select("status").First(&stored, "id = ?", scanID).Error; err != nil {
+		t.Fatalf("read status: %v", err)
 	}
-	if status == scan.StateRUNNING {
-		t.Fatalf("accidental insert must not default to RUNNING, got %q", status)
+	if stored.Status == scan.StateRUNNING {
+		t.Fatalf("accidental insert must not default to RUNNING, got %q", stored.Status)
 	}
 }
 
