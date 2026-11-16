@@ -4,6 +4,7 @@
 *.out
 /persistence
 .gomodcache/
+reports/
 
 # IDE
 .idea/
