@@ -51,12 +51,12 @@ type CreatePolicyInput struct {
 
 // CreatePolicyResult is the durable outcome of a successful policy create.
 type CreatePolicyResult struct {
-	PolicyID        uuid.UUID
-	ScanID          uuid.UUID
-	WalletAddress   string
-	ChainID         int64
-	PayloadSHA256   string
-	PersistedAt     time.Time
+	PolicyID      uuid.UUID
+	ScanID        uuid.UUID
+	WalletAddress string
+	ChainID       int64
+	PayloadSHA256 string
+	PersistedAt   time.Time
 }
 
 // WalletReferenceCount is the W1 existence projection (policies only after RD-P3).

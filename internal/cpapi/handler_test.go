@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"cafe-persistence/internal/cpddl"
-	"cafe-persistence/internal/cpstore"
 	"cafe-persistence/internal/cproutes"
+	"cafe-persistence/internal/cpstore"
 	"cafe-persistence/internal/domain"
 	"cafe-persistence/internal/scanapi"
 
@@ -109,16 +109,16 @@ func createPolicyBody(scanID uuid.UUID, wallet, sha string) []byte {
 	issued := verifiedAt.Add(-time.Minute)
 	expires := verifiedAt.Add(9 * time.Minute)
 	body, _ := json.Marshal(map[string]any{
-		"scan_id":                     scanID.String(),
-		"wallet_address":              wallet,
-		"chain_id":                    1,
-		"payload":                     map[string]any{"mode": "strict", "signature": "raw"},
-		"payload_sha256":              sha,
-		"signed_message_hash":         "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-		"wallet_control_method":       "eoa_signature",
-		"wallet_control_verified_at":  verifiedAt.Format(time.RFC3339Nano),
-		"challenge_issued_at":         issued.Format(time.RFC3339Nano),
-		"challenge_expires_at":        expires.Format(time.RFC3339Nano),
+		"scan_id":                    scanID.String(),
+		"wallet_address":             wallet,
+		"chain_id":                   1,
+		"payload":                    map[string]any{"mode": "strict", "signature": "raw"},
+		"payload_sha256":             sha,
+		"signed_message_hash":        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		"wallet_control_method":      "eoa_signature",
+		"wallet_control_verified_at": verifiedAt.Format(time.RFC3339Nano),
+		"challenge_issued_at":        issued.Format(time.RFC3339Nano),
+		"challenge_expires_at":       expires.Format(time.RFC3339Nano),
 	})
 	return body
 }

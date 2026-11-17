@@ -41,15 +41,15 @@ func TestToWalletObservedEvent_mapsScanToWire(t *testing.T) {
 	t.Parallel()
 	ts := time.Date(2026, 4, 17, 9, 59, 58, 0, time.UTC)
 	scan := &domain.ScanResult{
-		Address:         "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
-		Type:            domain.AccountTypeEOA,
-		Algorithm:       domain.AlgorithmECDSAsecp256k1,
-		KeyExposed:      true,
-		IsEOA:           true,
-		IsERC4337:       false,
-		ScannedAt:       ts,
-		Networks:        []string{"ethereum-mainnet", "base"},
-		Connections:     []string{},
+		Address:     "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
+		Type:        domain.AccountTypeEOA,
+		Algorithm:   domain.AlgorithmECDSAsecp256k1,
+		KeyExposed:  true,
+		IsEOA:       true,
+		IsERC4337:   false,
+		ScannedAt:   ts,
+		Networks:    []string{"ethereum-mainnet", "base"},
+		Connections: []string{},
 	}
 	meta := ExportMeta{
 		EventID:       "evt_1",
@@ -120,12 +120,12 @@ func TestToWalletObservedEvent_derivesCurrentPQPostureFromNISTLevel(t *testing.T
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			scan := &domain.ScanResult{
-				Address:    "0xabc0000000000000000000000000000000000009",
-				Type:       domain.AccountTypeEOA,
-				Algorithm:  domain.AlgorithmECDSAsecp256k1,
-				NISTLevel:  tc.nistLevel,
-				ScannedAt:  time.Now().UTC(),
-				Networks:   []string{"ethereum-mainnet"},
+				Address:   "0xabc0000000000000000000000000000000000009",
+				Type:      domain.AccountTypeEOA,
+				Algorithm: domain.AlgorithmECDSAsecp256k1,
+				NISTLevel: tc.nistLevel,
+				ScannedAt: time.Now().UTC(),
+				Networks:  []string{"ethereum-mainnet"},
 			}
 
 			ev := ToWalletObservedEvent(ExportMeta{
@@ -147,11 +147,11 @@ func TestToWalletObservedEvent_emptyChainIDsUnknownNetwork(t *testing.T) {
 	t.Parallel()
 	ts := time.Date(2026, 4, 17, 9, 0, 0, 0, time.UTC)
 	scan := &domain.ScanResult{
-		Address:    "0xabc0000000000000000000000000000000000001",
-		Type:       domain.AccountTypeEOA,
-		Algorithm:  domain.AlgorithmECDSAsecp256k1,
-		ScannedAt:  ts,
-		Networks:   []string{"unknown-custom-net", "other-net"},
+		Address:   "0xabc0000000000000000000000000000000000001",
+		Type:      domain.AccountTypeEOA,
+		Algorithm: domain.AlgorithmECDSAsecp256k1,
+		ScannedAt: ts,
+		Networks:  []string{"unknown-custom-net", "other-net"},
 	}
 	ev := ToWalletObservedEvent(ExportMeta{
 		EventID: "e1", CorrelationID: "c", CausationID: "x",
@@ -236,11 +236,11 @@ func TestToWalletObservedEvent_eoaKeepsSecp256k1(t *testing.T) {
 func TestToWalletObservedEvent_erc4337AccountKind(t *testing.T) {
 	t.Parallel()
 	scan := &domain.ScanResult{
-		Address:    "0xabc0000000000000000000000000000000000003",
-		Type:       domain.AccountTypeAA,
-		Algorithm:  domain.AlgorithmECDSAsecp256k1,
-		ScannedAt:  time.Now().UTC(),
-		Networks:   []string{"base"},
+		Address:   "0xabc0000000000000000000000000000000000003",
+		Type:      domain.AccountTypeAA,
+		Algorithm: domain.AlgorithmECDSAsecp256k1,
+		ScannedAt: time.Now().UTC(),
+		Networks:  []string{"base"},
 	}
 	ev := ToWalletObservedEvent(ExportMeta{EventID: "e", CorrelationID: "c", CausationID: "a"}, scan, testChainMap)
 	if err := ev.Validate(); err != nil {

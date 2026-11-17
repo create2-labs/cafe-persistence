@@ -29,27 +29,27 @@ const (
 	// Redis configuration
 	RedisURL = "REDIS_URL"
 
-	defaultPostgreSQLHost     = "127.0.0.1"
-	defaultPostgreSQLPort     = "5432"
-	defaultPostgreSQLUser     = "cafe"
-	defaultPostgreSQLDatabase = "cafe"
-	defaultPostgreSQLSSLMode  = "disable"
-	defaultNATSURL            = "nats://localhost:4222"
-	defaultRedisURL           = "redis://localhost:6379"
-	defaultPersistenceHealthPort     = "8081"
+	defaultPostgreSQLHost              = "127.0.0.1"
+	defaultPostgreSQLPort              = "5432"
+	defaultPostgreSQLUser              = "cafe"
+	defaultPostgreSQLDatabase          = "cafe"
+	defaultPostgreSQLSSLMode           = "disable"
+	defaultNATSURL                     = "nats://localhost:4222"
+	defaultRedisURL                    = "redis://localhost:6379"
+	defaultPersistenceHealthPort       = "8081"
 	defaultPersistenceInternalHTTPPort = "8082"
 )
 
 func GetDefaultConfigValues() map[string]any {
 	return map[string]any{
-		PostgreSQLHost:           defaultPostgreSQLHost,
-		PostgreSQLPort:           defaultPostgreSQLPort,
-		PostgreSQLUser:           defaultPostgreSQLUser,
-		PostgreSQLDatabase:       defaultPostgreSQLDatabase,
-		PostgreSQLSSLMode:        defaultPostgreSQLSSLMode,
-		NATSURL:                  defaultNATSURL,
-		RedisURL:                 defaultRedisURL,
-		PersistenceHealthPort:        defaultPersistenceHealthPort,
-		PersistenceInternalHTTPPort:  defaultPersistenceInternalHTTPPort,
+		PostgreSQLHost:              defaultPostgreSQLHost,
+		PostgreSQLPort:              defaultPostgreSQLPort,
+		PostgreSQLUser:              defaultPostgreSQLUser,
+		PostgreSQLDatabase:          defaultPostgreSQLDatabase,
+		PostgreSQLSSLMode:           defaultPostgreSQLSSLMode,
+		NATSURL:                     defaultNATSURL,
+		RedisURL:                    defaultRedisURL,
+		PersistenceHealthPort:       defaultPersistenceHealthPort,
+		PersistenceInternalHTTPPort: defaultPersistenceInternalHTTPPort,
 	}
 }

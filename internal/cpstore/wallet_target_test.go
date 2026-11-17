@@ -13,7 +13,7 @@ func TestNormalizeWalletTargetAddress_canonical(t *testing.T) {
 	t.Parallel()
 	cases := map[string]string{
 		"0x742D35Cc6634C0532925a3b844Bc454e4438f44e": "0x742d35cc6634c0532925a3b844bc454e4438f44e",
-		"742d35cc6634c0532925a3b844bc454e4438f44e":  "0x742d35cc6634c0532925a3b844bc454e4438f44e",
+		"742d35cc6634c0532925a3b844bc454e4438f44e":   "0x742d35cc6634c0532925a3b844bc454e4438f44e",
 	}
 	for in, want := range cases {
 		got, err := NormalizeWalletTargetAddress(in)

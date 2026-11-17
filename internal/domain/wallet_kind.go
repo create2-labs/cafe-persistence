@@ -2,10 +2,10 @@ package domain
 
 // Wallet type strings match OpenAPI WalletScanResult.wallet_type enum.
 const (
-	WalletTypeEOA           = "eoa"
-	WalletTypeSmartAccount  = "smart_account"
-	WalletTypeContract      = "contract"
-	WalletTypeUnknown       = "unknown"
+	WalletTypeEOA          = "eoa"
+	WalletTypeSmartAccount = "smart_account"
+	WalletTypeContract     = "contract"
+	WalletTypeUnknown      = "unknown"
 )
 
 // DeriveWalletTypeV1 maps scanner posture fields to the v1 wallet_type enum.
