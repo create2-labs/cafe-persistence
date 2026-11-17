@@ -14,7 +14,7 @@ RUN go mod download
 
 COPY . .
 
-RUN go install golang.org/x/vuln/cmd/govulncheck@1.9.0 \
+RUN go install golang.org/x/vuln/cmd/govulncheck@v1.9.0 \
     && go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0
 
 CMD ["sh", "-c", "go mod download && golangci-lint run ./... && go test ./... && govulncheck ./..."]
