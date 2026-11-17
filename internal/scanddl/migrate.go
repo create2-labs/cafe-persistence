@@ -27,6 +27,16 @@ var walletResultDDL = []string{
 	`ALTER TABLE scan_results DROP COLUMN IF EXISTS last_seen`,
 	`ALTER TABLE scan_results DROP CONSTRAINT IF EXISTS chk_scan_results_public_key_recovery`,
 	`ALTER TABLE scan_results ADD CONSTRAINT chk_scan_results_public_key_recovery CHECK (public_key_recovery IN ('', 'not_required', 'recovered', 'unresolved'))`,
+	`ALTER TABLE scan_results DROP CONSTRAINT IF EXISTS chk_scan_results_account_type`,
+	`ALTER TABLE scan_results ADD CONSTRAINT chk_scan_results_account_type CHECK (account_type IN ('', 'eoa', 'contract', 'blank'))`,
+}
+
+// relatedAddressDDL holds the constraints of scan_related_addresses (design §5.2).
+var relatedAddressDDL = []string{
+	`ALTER TABLE scan_related_addresses DROP CONSTRAINT IF EXISTS chk_scan_related_addresses_role`,
+	`ALTER TABLE scan_related_addresses ADD CONSTRAINT chk_scan_related_addresses_role CHECK (role IN ('delegation_target', 'deployer'))`,
+	`ALTER TABLE scan_related_addresses DROP CONSTRAINT IF EXISTS chk_scan_related_addresses_enrichment`,
+	`ALTER TABLE scan_related_addresses ADD CONSTRAINT chk_scan_related_addresses_enrichment CHECK ((role = 'delegation_target' AND enrichment_id IS NULL) OR (role = 'deployer' AND enrichment_id IS NOT NULL))`,
 }
 
 // RequiredIndexNames are the IMM list/history indexes applied at persistence boot (ADR §14.5).
@@ -47,6 +57,7 @@ var ScanTableNames = []string{
 	"scan_results",
 	"tls_scan_results",
 	"scan_usage_events",
+	"scan_related_addresses",
 }
 
 // MigrateScanSchema runs AutoMigrate on scan tables and applies IMM index DDL.
@@ -57,6 +68,7 @@ func MigrateScanSchema(db *gorm.DB) error {
 		&domain.TLSScanResultEntity{},
 		&domain.ScanResultEntity{},
 		&domain.ScanUsageEventEntity{},
+		&domain.ScanRelatedAddressEntity{},
 	); err != nil {
 		return fmt.Errorf("scan tables AutoMigrate: %w", err)
 	}
@@ -66,6 +78,11 @@ func MigrateScanSchema(db *gorm.DB) error {
 		}
 	}
 	for _, q := range walletResultDDL {
+		if err := db.Exec(q).Error; err != nil {
+			return fmt.Errorf("scan DDL %q: %w", q, err)
+		}
+	}
+	for _, q := range relatedAddressDDL {
 		if err := db.Exec(q).Error; err != nil {
 			return fmt.Errorf("scan DDL %q: %w", q, err)
 		}

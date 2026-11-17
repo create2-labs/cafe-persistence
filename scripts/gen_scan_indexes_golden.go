@@ -41,7 +41,7 @@ func main() {
 SELECT indexname AS index_name
 FROM pg_indexes
 WHERE schemaname = 'public'
-  AND tablename IN ('scan_results', 'tls_scan_results', 'scan_usage_events')
+  AND tablename IN ('scan_results', 'tls_scan_results', 'scan_usage_events', 'scan_related_addresses')
 ORDER BY tablename, indexname`).Scan(&rows).Error; err != nil {
 		fmt.Fprintf(os.Stderr, "query: %v\n", err)
 		os.Exit(1)
@@ -57,7 +57,7 @@ ORDER BY tablename, indexname`).Scan(&rows).Error; err != nil {
 		os.Exit(1)
 	}
 	defer out.Close()
-	fmt.Fprintln(out, "# pg_indexes on scan_results, tls_scan_results, scan_usage_events (ADR §14.5)")
+	fmt.Fprintln(out, "# pg_indexes on scan_results, tls_scan_results, scan_usage_events, scan_related_addresses (ADR §14.5)")
 	for _, n := range names {
 		fmt.Fprintln(out, n)
 	}

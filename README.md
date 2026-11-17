@@ -282,33 +282,44 @@ Au prochain boot, `cafe-persistence` recrée tables et index via `Migrate*Schema
 
 ## DDL scan (ADR §14.5)
 
-> Rappel : [pourquoi migrer](#schéma-postgres--rôle-des-migrations-et-des-golden-files) même quand la DB dev est RAZ-able.
+> Reminder: [why migrate](#schéma-postgres--rôle-des-migrations-et-des-golden-files) even when the dev DB can be wiped.
 
 ### Ownership
 
-At boot, `cafe-persistence` is the sole writer of scan tables DDL in this jalon:
+At boot, `cafe-persistence` is the sole writer of scan tables DDL in this milestone:
 
-1. GORM `AutoMigrate` on `scan_results`, `tls_scan_results`, `scan_usage_events`
+1. GORM `AutoMigrate` on `scan_results`, `tls_scan_results`, `scan_usage_events`, `scan_related_addresses`
 2. IMM index DDL (drop legacy uniques, create list indexes, ledger index, status default drop)
 
 Logic lives in `internal/scanddl/migrate.go` and is invoked from `cmd/persistence/main.go`.
 
-### Index attendus
+### Expected indexes
 
-| Index | Table | Rôle |
+| Index | Table | Role |
 |-------|-------|------|
-| `idx_scan_results_user_address_created_at` | `scan_results` | Historique liste (IMM-2) |
-| `idx_tls_scan_results_user_url_created_at` | `tls_scan_results` | Historique liste (IMM-2) |
-| `idx_scan_usage_events_user_kind` | `scan_usage_events` | Quota plan (IMM-6b-1) |
+| `idx_scan_results_user_address_created_at` | `scan_results` | List history (IMM-2) |
+| `idx_tls_scan_results_user_url_created_at` | `tls_scan_results` | List history (IMM-2) |
+| `idx_scan_usage_events_user_kind` | `scan_usage_events` | Plan quota (IMM-6b-1) |
 
-Index legacy **absents** après migration : `idx_scan_results_user_address`, `idx_tls_scan_results_user_url`.
+Table `scan_related_addresses` (OC-P21) holds the addresses related to a wallet scan, such as an EIP-7702 delegation target or a deployer. Its primary key is `scan_related_addresses_pkey` on (`scan_id`, `chain_id`, `role`, `address`), it has no foreign key to `scan_results`, and its soft-delete column is indexed by `idx_scan_related_addresses_deleted_at`.
 
-### Vérification (CI + local)
+### Constraints
 
-Test d'intégration Postgres (`-tags=integration`) compare `pg_indexes` au golden file :
+| Constraint | Table | Rule |
+|------------|-------|------|
+| `chk_scan_results_public_key_recovery` | `scan_results` | `public_key_recovery` is `''`, `not_required`, `recovered`, or `unresolved` |
+| `chk_scan_results_account_type` | `scan_results` | `account_type` is `''`, `eoa`, `contract`, or `blank` |
+| `chk_scan_related_addresses_role` | `scan_related_addresses` | `role` is `delegation_target` or `deployer` |
+| `chk_scan_related_addresses_enrichment` | `scan_related_addresses` | `enrichment_id` is NULL for `delegation_target` and set for `deployer` |
+
+Legacy indexes are **absent** after migration: `idx_scan_results_user_address`, `idx_tls_scan_results_user_url`.
+
+### Verification (CI and local)
+
+The Postgres integration test (`-tags=integration`) compares `pg_indexes` with the golden file:
 
 ```bash
-# Postgres requis (stack cafe-deploy, ou conteneur local)
+# Postgres required (cafe-deploy stack, or a local container)
 export POSTGRES_HOST=127.0.0.1
 export POSTGRES_PORT=5432
 export POSTGRES_USER=cafe
@@ -319,13 +330,13 @@ export POSTGRES_SSLMODE=disable
 go test -tags=integration ./internal/scanddl/...
 ```
 
-Golden file : `testdata/ddl/scan_indexes.golden`
+Golden file: `testdata/ddl/scan_indexes.golden`
 
-### Régénérer le golden DDL après un changement de schéma
+### Regenerate the DDL golden file after a schema change
 
-Quand `internal/scanddl/migrate.go` change (nouvel index, nouvelle table scan, etc.) :
+When `internal/scanddl/migrate.go` changes (new index, new scan table, and so on):
 
-1. Démarrer Postgres vide (ou reset volume dev) :
+1. Start an empty Postgres (or reset the dev volume):
 
 ```bash
 docker run -d --name cafe-pers-ddl \
@@ -333,7 +344,7 @@ docker run -d --name cafe-pers-ddl \
   -p 5432:5432 postgres:16
 ```
 
-2. Régénérer le snapshot :
+2. Regenerate the snapshot:
 
 ```bash
 export POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=5432
@@ -342,13 +353,13 @@ export POSTGRES_USER=cafe POSTGRES_PASSWORD=cafe POSTGRES_DATABASE=cafe POSTGRES
 go run ./scripts/gen_scan_indexes_golden.go
 ```
 
-3. Vérifier le diff sur `testdata/ddl/scan_indexes.golden`, puis relancer :
+3. Check the diff on `testdata/ddl/scan_indexes.golden`, then run again:
 
 ```bash
 go test -tags=integration ./internal/scanddl/...
 ```
 
-4. Committer golden + code DDL ensemble (même PR).
+4. Commit the golden file and the DDL code together (same PR).
 
 ## Docker image
 
