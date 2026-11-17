@@ -108,11 +108,8 @@ func mapAccountKind(scan *domain.ScanResult) v01.AccountKind {
 	switch domain.DeriveWalletTypeV1(scan.Type, scan.IsEOA, scan.IsERC4337) {
 	case domain.WalletTypeEOA:
 		return v01.AccountKindEOA
-	case domain.WalletTypeSmartAccount:
-		return v01.AccountKindERC4337SmartAccount
-	case domain.WalletTypeContract:
-		return v01.AccountKindContractAccount
 	default:
+		// smart_account and contract have no v01 account kind since cafe-contracts v1.1.0.
 		return v01.AccountKindUnknown
 	}
 }

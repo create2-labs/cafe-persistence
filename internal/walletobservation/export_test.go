@@ -233,24 +233,6 @@ func TestToWalletObservedEvent_eoaKeepsSecp256k1(t *testing.T) {
 	}
 }
 
-func TestToWalletObservedEvent_erc4337AccountKind(t *testing.T) {
-	t.Parallel()
-	scan := &domain.ScanResult{
-		Address:   "0xabc0000000000000000000000000000000000003",
-		Type:      domain.AccountTypeAA,
-		Algorithm: domain.AlgorithmECDSAsecp256k1,
-		ScannedAt: time.Now().UTC(),
-		Networks:  []string{"base"},
-	}
-	ev := ToWalletObservedEvent(ExportMeta{EventID: "e", CorrelationID: "c", CausationID: "a"}, scan, testChainMap)
-	if err := ev.Validate(); err != nil {
-		t.Fatal(err)
-	}
-	if ev.Payload.AccountKind != string(v01.AccountKindERC4337SmartAccount) {
-		t.Fatalf("got %q", ev.Payload.AccountKind)
-	}
-}
-
 func TestGoldenPlaceholderJSON_matchesExport(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("testdata", "export_wallet_observed_v01_placeholder.json"))
 	if err != nil {

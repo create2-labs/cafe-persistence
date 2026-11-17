@@ -3,7 +3,7 @@ module cafe-persistence
 go 1.27.3
 
 require (
-	github.com/create2-labs/cafe-contracts v0.1.1-0.20261012104448-124da4806261
+	github.com/create2-labs/cafe-contracts v1.1.0
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.9.2
 	github.com/nats-io/nats.go v1.51.0
