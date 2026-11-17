@@ -13,9 +13,9 @@ import (
 )
 
 const (
-	tlsKeyPrefix     = "tls:user:"
-	walletKeyPrefix  = "wallet:user:"
-	scanResultTTL    = 30 * time.Minute
+	tlsKeyPrefix    = "tls:user:"
+	walletKeyPrefix = "wallet:user:"
+	scanResultTTL   = 30 * time.Minute
 )
 
 // RedisCache writes scan results for backend read (write-through from persistence).

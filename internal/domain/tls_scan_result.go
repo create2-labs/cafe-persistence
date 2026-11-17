@@ -13,16 +13,16 @@ type TLSScanResultEntity struct {
 	ID              uuid.UUID  `gorm:"type:char(36);primary_key" json:"id"`
 	UserID          *uuid.UUID `gorm:"type:char(36);index" json:"user_id,omitempty"` // NULL for default endpoints
 	URL             string     `gorm:"type:varchar(500);not null;index" json:"url"`
-	Host            string    `gorm:"type:varchar(255);not null" json:"host"`
-	Port            int       `gorm:"not null" json:"port"`
-	ProtocolVersion string    `gorm:"type:varchar(20);not null" json:"protocol_version"`
-	NISTLevel       NISTLevel `gorm:"not null" json:"nist_level"`
-	RiskScore       float64   `gorm:"not null" json:"risk_score"`
-	PQCRisk         string    `gorm:"type:varchar(20);not null" json:"pqc_risk"`
-	Certificate     string    `gorm:"type:text" json:"-"` // JSON stored as text
-	CipherSuites    string    `gorm:"type:text" json:"-"` // JSON array stored as text
-	SupportedPQCs   string    `gorm:"type:text" json:"-"` // JSON array stored as text
-	Recommendations string    `gorm:"type:text" json:"-"` // JSON array stored as text
+	Host            string     `gorm:"type:varchar(255);not null" json:"host"`
+	Port            int        `gorm:"not null" json:"port"`
+	ProtocolVersion string     `gorm:"type:varchar(20);not null" json:"protocol_version"`
+	NISTLevel       NISTLevel  `gorm:"not null" json:"nist_level"`
+	RiskScore       float64    `gorm:"not null" json:"risk_score"`
+	PQCRisk         string     `gorm:"type:varchar(20);not null" json:"pqc_risk"`
+	Certificate     string     `gorm:"type:text" json:"-"` // JSON stored as text
+	CipherSuites    string     `gorm:"type:text" json:"-"` // JSON array stored as text
+	SupportedPQCs   string     `gorm:"type:text" json:"-"` // JSON array stored as text
+	Recommendations string     `gorm:"type:text" json:"-"` // JSON array stored as text
 	// PQC-specific fields
 	KexAlgorithm string         `gorm:"type:varchar(100)" json:"kex_algorithm,omitempty"`
 	KexPQCReady  bool           `gorm:"default:false" json:"kex_pqc_ready,omitempty"`
@@ -33,8 +33,8 @@ type TLSScanResultEntity struct {
 	Curve        string         `gorm:"type:varchar(50)" json:"curve,omitempty"`
 	NISTLevels   string         `gorm:"type:text" json:"-"`                                    // JSON map stored as text
 	Default      bool           `gorm:"column:default;default:false" json:"default,omitempty"` // Whether this is a default endpoint
-	Status       string         `gorm:"type:varchar(20);index" json:"status"` // empty/PENDING until scan.started (RUNNING); then SUCCESS, FAILED, TIMEOUT, UNREACHABLE
-	Error        string         `gorm:"type:text" json:"error,omitempty"`                     // Error message when status is FAILED
+	Status       string         `gorm:"type:varchar(20);index" json:"status"`                  // empty/PENDING until scan.started (RUNNING); then SUCCESS, FAILED, TIMEOUT, UNREACHABLE
+	Error        string         `gorm:"type:text" json:"error,omitempty"`                      // Error message when status is FAILED
 	CreatedAt    time.Time      `json:"created_at"`
 	UpdatedAt    time.Time      `json:"updated_at"`
 	DeletedAt    gorm.DeletedAt `gorm:"index" json:"-"`

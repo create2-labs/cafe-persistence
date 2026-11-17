@@ -262,17 +262,17 @@ func (h *Handler) writeStoreError(w http.ResponseWriter, r *http.Request, err er
 
 func policyRowJSON(rec cpstore.PolicyRecord) map[string]any {
 	out := map[string]any{
-		"id":              rec.ID.String(),
-		"user_id":         rec.UserID,
-		"scan_id":         rec.ScanID.String(),
-		"wallet_address":  rec.WalletAddress,
-		"chain_id":        rec.ChainID,
-		"payload":         rec.Payload,
-		"payload_sha256":  rec.PayloadSHA256,
-		"status":          rec.Status,
-		"persisted_at":    rec.PersistedAt.UTC().Format(time.RFC3339Nano),
-		"created_at":      rec.CreatedAt.UTC().Format(time.RFC3339Nano),
-		"updated_at":      rec.UpdatedAt.UTC().Format(time.RFC3339Nano),
+		"id":             rec.ID.String(),
+		"user_id":        rec.UserID,
+		"scan_id":        rec.ScanID.String(),
+		"wallet_address": rec.WalletAddress,
+		"chain_id":       rec.ChainID,
+		"payload":        rec.Payload,
+		"payload_sha256": rec.PayloadSHA256,
+		"status":         rec.Status,
+		"persisted_at":   rec.PersistedAt.UTC().Format(time.RFC3339Nano),
+		"created_at":     rec.CreatedAt.UTC().Format(time.RFC3339Nano),
+		"updated_at":     rec.UpdatedAt.UTC().Format(time.RFC3339Nano),
 	}
 	if rec.TenantID != "" {
 		out["tenant_id"] = rec.TenantID
