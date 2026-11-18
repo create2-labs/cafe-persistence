@@ -22,7 +22,10 @@ func TestMigrateScanSchema_matchesGoldenIndexes(t *testing.T) {
 		host := envOr("POSTGRES_HOST", "127.0.0.1")
 		port := envOr("POSTGRES_PORT", "5432")
 		user := envOr("POSTGRES_USER", "cafe")
-		pass := envOr("POSTGRES_PASSWORD", "cafe")
+		pass := os.Getenv("POSTGRES_PASSWORD")
+		if pass == "" {
+			t.Fatal("POSTGRES_PASSWORD not set in the environment")
+		}
 		dbname := envOr("POSTGRES_DATABASE", "cafe")
 		sslmode := envOr("POSTGRES_SSLMODE", "disable")
 		dsn = "host=" + host + " port=" + port + " user=" + user + " password=" + pass + " dbname=" + dbname + " sslmode=" + sslmode
