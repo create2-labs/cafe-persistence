@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -22,6 +23,7 @@ import (
 
 	"github.com/create2-labs/cafe-contracts/cafenatsv01"
 	lifecycle "github.com/create2-labs/cafe-contracts/discovery/scanlifecycle/v1"
+	addressv1 "github.com/create2-labs/cafe-contracts/observation/address/v1"
 	"github.com/google/uuid"
 	natslib "github.com/nats-io/nats.go"
 	goredis "github.com/redis/go-redis/v9"
@@ -75,7 +77,43 @@ func runningBody(id string, user uuid.UUID) map[string]any {
 	}
 }
 
-func successBody(id string, user uuid.UUID, resultAddr string) map[string]any {
+// observedAtUTC is sent with a +02:00 offset so that the stored value proves the UTC normalization (CA1.5).
+var observedAtUTC = time.Date(2026, 10, 23, 10, 0, 0, 0, time.UTC)
+
+func u64(n uint64) *uint64 { return &n }
+func flag(v bool) *bool    { return &v }
+
+// eoaResult is a valid observation/address/v1 result of an eoa: chain 1 exposed, chain 10 not, chain 137 unobserved.
+func eoaResult(addr string) addressv1.Result {
+	return addressv1.Result{
+		Address: addr, AccountType: addressv1.AccountTypeEOA, ObservedAt: observedAtUTC.In(time.FixedZone("", 2*3600)),
+		Chains: []addressv1.Chain{
+			{ChainID: 1, Qualification: addressv1.QualificationEOA, Nonce: u64(3), KeyExposed: flag(true)},
+			{ChainID: 10, Qualification: addressv1.QualificationEOA, Nonce: u64(0), KeyExposed: flag(false)},
+		},
+		UnobservedChainIDs: []int64{137},
+		EOA:                &addressv1.EOA{KeyExposed: true, Algorithm: "ECDSA-secp256k1", NISTLevel: 1, RiskScore: 0.4},
+	}
+}
+
+// resultWire encodes a result as the JSON object of the request; the named keys are omitted.
+func resultWire(t *testing.T, r addressv1.Result, omit ...string) map[string]any {
+	t.Helper()
+	raw, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range omit {
+		delete(out, k)
+	}
+	return out
+}
+
+func successWith(id string, user uuid.UUID, result any) map[string]any {
 	return map[string]any{
 		"transition_id": id,
 		"user_id":       user.String(),
@@ -83,11 +121,20 @@ func successBody(id string, user uuid.UUID, resultAddr string) map[string]any {
 		"source_states": []string{scan.StatePENDING, scan.StateRUNNING},
 		"target_state":  scan.StateSUCCESS,
 		"quota_action":  "keep",
-		"result": map[string]any{
-			"address": resultAddr, "type": "EOA", "algorithm": "ECDSA-secp256k1",
-			"nist_level": 1, "is_eoa": true, "risk_score": 4,
-		},
+		"result":        result,
 	}
+}
+
+func successBody(id string, user uuid.UUID, resultAddr string) map[string]any {
+	raw, err := json.Marshal(eoaResult(resultAddr))
+	if err != nil {
+		panic(err)
+	}
+	var result map[string]any
+	if err := json.Unmarshal(raw, &result); err != nil {
+		panic(err)
+	}
+	return successWith(id, user, result)
 }
 
 func failedBody(id string, user uuid.UUID) map[string]any {
@@ -455,7 +502,7 @@ func TestApplyWalletTransition_ProjectsTerminalSuccess(t *testing.T) {
 
 	code, got := postTransition(t, url, user, successBody("t-ok", user, transitionAddr))
 	assertProjected(t, code, got, "applied", scan.StateSUCCESS, true, true)
-	if !strings.Contains(cache.get(walletCacheKey(user)), `"risk_score":4`) {
+	if !strings.Contains(cache.get(walletCacheKey(user)), `"risk_score":0.4`) {
 		t.Fatalf("redis %s", cache.get(walletCacheKey(user)))
 	}
 	readyRaw := bus.body(lifecycle.SubjectScanReady, 0)
@@ -478,10 +525,10 @@ func TestApplyWalletTransition_ProjectsTerminalSuccess(t *testing.T) {
 	}
 
 	loser := successBody("t-lose", user, transitionAddr)
-	loser["result"].(map[string]any)["risk_score"] = 9
+	loser["result"].(map[string]any)["eoa"].(map[string]any)["risk_score"] = 0.9
 	code, got = postTransition(t, url, user, loser)
 	assertProjected(t, code, got, "already_terminal", scan.StateSUCCESS, false, false)
-	if !strings.Contains(cache.get(walletCacheKey(user)), `"risk_score":4`) || strings.Contains(cache.get(walletCacheKey(user)), `"risk_score":9`) {
+	if !strings.Contains(cache.get(walletCacheKey(user)), `"risk_score":0.4`) || strings.Contains(cache.get(walletCacheKey(user)), `"risk_score":0.9`) {
 		t.Fatalf("loser rewrote redis %s", cache.get(walletCacheKey(user)))
 	}
 	if bus.count(lifecycle.SubjectScanReady) != 2 || bus.count(cafenatsv01.NATSSubjectDiscoveryWalletObservedV01) != 2 || ledgerRows(t, db, scanID) != 1 {
@@ -492,7 +539,7 @@ func TestApplyWalletTransition_ProjectsTerminalSuccess(t *testing.T) {
 	assertProjected(t, code, got, "applied", scan.StateRUNNING, false, false)
 	code, got = postTransition(t, runURL, user, runningBody("t-other", user))
 	assertProjected(t, code, got, "already_running", scan.StateRUNNING, false, false)
-	if !strings.Contains(cache.get(walletCacheKey(user)), `"risk_score":4`) || bus.count(lifecycle.SubjectScanReady) != 2 || bus.count(cafenatsv01.NATSSubjectDiscoveryWalletObservedV01) != 2 {
+	if !strings.Contains(cache.get(walletCacheKey(user)), `"risk_score":0.4`) || bus.count(lifecycle.SubjectScanReady) != 2 || bus.count(cafenatsv01.NATSSubjectDiscoveryWalletObservedV01) != 2 {
 		t.Fatal("RUNNING published")
 	}
 }
@@ -633,5 +680,244 @@ func TestApplyWalletTransition_ConcurrentCreatesOneRow(t *testing.T) {
 	}
 	if bus.count(lifecycle.SubjectScanReady) != 1 || bus.count(cafenatsv01.NATSSubjectDiscoveryWalletObservedV01) != 1 {
 		t.Fatal("concurrent loser published")
+	}
+}
+
+// postSuccess records the credit reservation of a new scan and posts one SUCCESS transition for it.
+func postSuccess(t *testing.T, db *gorm.DB, ts *httptest.Server, user uuid.UUID, id string, result any) (uuid.UUID, string) {
+	t.Helper()
+	scanID := uuid.New()
+	if err := repository.NewScanUsageLedgerRepository(db).RecordSuccessUsage(user, scanID, domain.ScanUsageKindWallet); err != nil {
+		t.Fatal(err)
+	}
+	code, got := postTransition(t, transitionURL(ts.URL, scanID), user, successWith(id, user, result))
+	if code != http.StatusOK {
+		t.Fatalf("status %d body %#v", code, got)
+	}
+	outcome, _ := got["outcome"].(string)
+	return scanID, outcome
+}
+
+func requireStoredRow(t *testing.T, db *gorm.DB, scanID uuid.UUID) domain.ScanResultEntity {
+	t.Helper()
+	row, ok := loadWalletRow(t, db, scanID)
+	if !ok || row.Status != scan.StateSUCCESS {
+		t.Fatalf("row %+v ok %v", row, ok)
+	}
+	return row
+}
+
+func TestApplyWalletTransition_StoresQualification(t *testing.T) {
+	db := setupScanAPITestDB(t)
+	ts := startTransitionAPI(t, db)
+	defer ts.Close()
+	user := uuid.New()
+
+	t.Run("eoa with a designator chain without nonce", func(t *testing.T) {
+		r := eoaResult(transitionAddr)
+		// CA2.6: chain 1 reads empty code with a delegation designator and no readable nonce.
+		r.Chains[0] = addressv1.Chain{ChainID: 1, Qualification: addressv1.QualificationEOA, KeyExposed: flag(true)}
+		r.RelatedAddresses = []addressv1.Related{{Role: addressv1.RelatedRoleDelegationTarget, ChainID: 1, Address: "0x2222222222222222222222222222222222222222"}}
+		scanID, outcome := postSuccess(t, db, ts, user, "q-eoa", resultWire(t, r))
+		if outcome != "applied" {
+			t.Fatalf("outcome %q", outcome)
+		}
+		row := requireStoredRow(t, db, scanID)
+
+		if row.AccountType != "eoa" {
+			t.Fatalf("account_type %q", row.AccountType)
+		}
+		// CA1.5: observed_at is stored in UTC.
+		if row.ObservedAt == nil || !row.ObservedAt.Equal(observedAtUTC) {
+			t.Fatalf("observed_at %v, want %v", row.ObservedAt, observedAtUTC)
+		}
+		if _, offset := row.ObservedAt.Zone(); offset != 0 {
+			t.Fatalf("observed_at offset %d, want UTC", offset)
+		}
+		// CA2.1: the observed chains and the unobserved chain ids are stored.
+		chains, err := row.DecodeChains()
+		if err != nil || !reflect.DeepEqual(chains, r.Chains) {
+			t.Fatalf("chains %+v err %v, want %+v", chains, err, r.Chains)
+		}
+		unobserved, err := row.DecodeUnobservedChainIDs()
+		if err != nil || !reflect.DeepEqual(unobserved, []int64{137}) {
+			t.Fatalf("unobserved %v err %v", unobserved, err)
+		}
+		// CA2.2: an unobserved chain has no entry in chains.
+		for _, c := range chains {
+			if c.ChainID == 137 {
+				t.Fatalf("unobserved chain 137 has an entry %+v", c)
+			}
+		}
+		// CA2.6: the designator chain is stored with key_exposed true and no nonce.
+		if c := chains[0]; c.ChainID != 1 || c.Nonce != nil || c.KeyExposed == nil || !*c.KeyExposed {
+			t.Fatalf("designator chain %+v", c)
+		}
+		if anomalies, err := row.DecodeAnomalies(); err != nil || len(anomalies) != 0 {
+			t.Fatalf("anomalies %v err %v", anomalies, err)
+		}
+		// The eoa block fills the eoa columns.
+		if !row.KeyExposed || string(row.Algorithm) != "ECDSA-secp256k1" || int(row.NISTLevel) != 1 || row.RiskScore != 0.4 {
+			t.Fatalf("eoa columns %+v", row)
+		}
+		// The replaced columns are not set (design §5.3 Row), and delegation_target rows belong to OC-P22b.
+		if row.Type != "" || row.IsEOA || row.IsERC4337 || row.Networks != "" || row.Delegations != "" || row.Connections != "" {
+			t.Fatalf("replaced columns set %+v", row)
+		}
+		var related int64
+		if err := db.AutoMigrate(&domain.ScanRelatedAddressEntity{}); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.Model(&domain.ScanRelatedAddressEntity{}).Where("scan_id = ?", scanID).Count(&related).Error; err != nil || related != 0 {
+			t.Fatalf("related rows %d err %v, want none before OC-P22b", related, err)
+		}
+	})
+
+	t.Run("contract with an anomaly", func(t *testing.T) {
+		r := addressv1.Result{
+			Address: transitionAddr, AccountType: addressv1.AccountTypeContract, ObservedAt: observedAtUTC,
+			Chains: []addressv1.Chain{
+				{ChainID: 1, Qualification: addressv1.QualificationContract},
+				{ChainID: 10, Qualification: addressv1.QualificationNotDeployed, Nonce: u64(4)},
+			},
+			Anomalies: []addressv1.Anomaly{addressv1.AnomalyContractWithEOAActivity},
+		}
+		scanID, outcome := postSuccess(t, db, ts, user, "q-contract", resultWire(t, r))
+		if outcome != "applied" {
+			t.Fatalf("outcome %q", outcome)
+		}
+		row := requireStoredRow(t, db, scanID)
+		if row.AccountType != "contract" {
+			t.Fatalf("account_type %q", row.AccountType)
+		}
+		// CA1.7: the anomaly is stored and traceable.
+		anomalies, err := row.DecodeAnomalies()
+		if err != nil || !reflect.DeepEqual(anomalies, r.Anomalies) {
+			t.Fatalf("anomalies %v err %v", anomalies, err)
+		}
+		chains, err := row.DecodeChains()
+		if err != nil || !reflect.DeepEqual(chains, r.Chains) {
+			t.Fatalf("chains %+v err %v", chains, err)
+		}
+		// Without an eoa block the eoa columns hold the RUNNING values (design §5.3 Row).
+		if row.KeyExposed || row.Algorithm != "" || row.NISTLevel != 0 || row.RiskScore != 0 {
+			t.Fatalf("eoa columns set %+v", row)
+		}
+	})
+}
+
+func TestApplyWalletTransition_InvalidResultRejected(t *testing.T) {
+	db := setupScanAPITestDB(t)
+	ts := startTransitionAPI(t, db)
+	defer ts.Close()
+	user := uuid.New()
+
+	noNonce := eoaResult(transitionAddr)
+	noNonce.Chains[1] = addressv1.Chain{ChainID: 10, Qualification: addressv1.QualificationEOA, KeyExposed: flag(false)}
+	cases := map[string]any{
+		// CA2.6: a chain without nonce and without designator is unobserved, not a valid chain.
+		"nonce-less chain without designator": resultWire(t, noNonce),
+		"old result shape":                    map[string]any{"address": transitionAddr, "type": "EOA", "algorithm": "ECDSA-secp256k1", "nist_level": 1, "is_eoa": true, "risk_score": 4},
+		"result null":                         nil,
+		"address mismatch":                    resultWire(t, eoaResult("0xdef0000000000000000000000000000000000002")),
+	}
+	for name, result := range cases {
+		t.Run(name, func(t *testing.T) {
+			scanID := uuid.New()
+			if err := repository.NewScanUsageLedgerRepository(db).RecordSuccessUsage(user, scanID, domain.ScanUsageKindWallet); err != nil {
+				t.Fatal(err)
+			}
+			code, got := postTransition(t, transitionURL(ts.URL, scanID), user, successWith("bad-"+name, user, result))
+			assertHTTPOutcome(t, code, got, "rejected", "", false)
+			if _, ok := loadWalletRow(t, db, scanID); ok {
+				t.Fatal("rejected result wrote a row")
+			}
+			if ledgerRows(t, db, scanID) != 1 {
+				t.Fatal("rejected result changed the ledger")
+			}
+		})
+	}
+
+}
+
+// Design §5.3 Decoding: RUNNING and FAILED carry no result, and "result": null counts as present.
+func TestApplyWalletTransition_ResultOnlyOnSuccess(t *testing.T) {
+	db := setupScanAPITestDB(t)
+	ts := startTransitionAPI(t, db)
+	defer ts.Close()
+	user := uuid.New()
+	for _, result := range []any{resultWire(t, eoaResult(transitionAddr)), nil} {
+		for _, body := range []map[string]any{runningBody("r", user), failedBody("f", user)} {
+			scanID := uuid.New()
+			body["result"] = result
+			code, got := postTransition(t, transitionURL(ts.URL, scanID), user, body)
+			assertHTTPOutcome(t, code, got, "rejected", "", false)
+			if _, ok := loadWalletRow(t, db, scanID); ok {
+				t.Fatalf("%v with result %v wrote a row", body["target_state"], result)
+			}
+		}
+	}
+}
+
+// Design §4.5 and §5.3 Write: a SUCCESS never overwrites a history column.
+func TestApplyWalletTransition_DoesNotWriteHistoryColumns(t *testing.T) {
+	db := setupScanAPITestDB(t)
+	ts := startTransitionAPI(t, db)
+	defer ts.Close()
+	user := uuid.New()
+	scanID := uuid.New()
+	if err := repository.NewScanUsageLedgerRepository(db).RecordSuccessUsage(user, scanID, domain.ScanUsageKindWallet); err != nil {
+		t.Fatal(err)
+	}
+	running := "t-running"
+	seed := domain.ScanResultEntity{
+		ID: scanID, UserID: user, Address: transitionAddr, Status: scan.StateRUNNING, TransitionID: &running,
+		PublicKey: "history-public-key", TransactionHash: "0xhistory", ExposedNetwork: "history-network",
+		PublicKeyRecovery: domain.PublicKeyRecoveryRecovered,
+	}
+	if err := db.Create(&seed).Error; err != nil {
+		t.Fatal(err)
+	}
+	code, got := postTransition(t, transitionURL(ts.URL, scanID), user, successBody("t-history", user, transitionAddr))
+	assertHTTPOutcome(t, code, got, "applied", scan.StateSUCCESS, true)
+	row := requireStoredRow(t, db, scanID)
+	if row.PublicKey != seed.PublicKey || row.TransactionHash != seed.TransactionHash ||
+		row.ExposedNetwork != seed.ExposedNetwork || row.PublicKeyRecovery != seed.PublicKeyRecovery {
+		t.Fatalf("history columns changed: %+v", row)
+	}
+	if row.AccountType != "eoa" {
+		t.Fatalf("qualification not written: %+v", row)
+	}
+}
+
+// OP-5.12: an empty list is stored as [], never as null, whether the field is omitted or empty.
+func TestApplyWalletTransition_StoresEmptyListsAsArrays(t *testing.T) {
+	db := setupScanAPITestDB(t)
+	ts := startTransitionAPI(t, db)
+	defer ts.Close()
+	user := uuid.New()
+	r := eoaResult(transitionAddr)
+	r.UnobservedChainIDs = []int64{}
+	r.Anomalies = []addressv1.Anomaly{}
+	for name, result := range map[string]map[string]any{
+		"omitted": resultWire(t, r, "unobserved_chain_ids", "anomalies"),
+		"empty":   resultWire(t, r),
+	} {
+		t.Run(name, func(t *testing.T) {
+			scanID, outcome := postSuccess(t, db, ts, user, "empty-"+name, result)
+			if outcome != "applied" {
+				t.Fatalf("outcome %q", outcome)
+			}
+			row := requireStoredRow(t, db, scanID)
+			if row.UnobservedChainIDs != "[]" || row.Anomalies != "[]" {
+				t.Fatalf("stored unobserved_chain_ids %q anomalies %q, want []", row.UnobservedChainIDs, row.Anomalies)
+			}
+			if ids, err := row.DecodeUnobservedChainIDs(); err != nil || len(ids) != 0 {
+				t.Fatalf("unobserved %v err %v", ids, err)
+			}
+			if anomalies, err := row.DecodeAnomalies(); err != nil || len(anomalies) != 0 {
+				t.Fatalf("anomalies %v err %v", anomalies, err)
+			}
+		})
 	}
 }

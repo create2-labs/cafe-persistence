@@ -41,7 +41,7 @@ func (c *RedisCache) SaveTLSScan(ctx context.Context, userID uuid.UUID, url stri
 }
 
 // SaveWalletScan writes wallet result for user+address and sets TTL.
-func (c *RedisCache) SaveWalletScan(ctx context.Context, userID uuid.UUID, address string, result *domain.ScanResult) error {
+func (c *RedisCache) SaveWalletScan(ctx context.Context, userID uuid.UUID, address string, result any) error {
 	key := walletKeyPrefix + userID.String() + ":" + address
 	data, err := json.Marshal(result)
 	if err != nil {
