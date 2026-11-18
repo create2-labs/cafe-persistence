@@ -760,16 +760,14 @@ func TestApplyWalletTransition_StoresQualification(t *testing.T) {
 		if !row.KeyExposed || string(row.Algorithm) != "ECDSA-secp256k1" || int(row.NISTLevel) != 1 || row.RiskScore != 0.4 {
 			t.Fatalf("eoa columns %+v", row)
 		}
-		// The replaced columns are not set (design §5.3 Row), and delegation_target rows belong to OC-P22b.
+		// The replaced columns are not set (design §5.3 Row).
 		if row.Type != "" || row.IsEOA || row.IsERC4337 || row.Networks != "" || row.Delegations != "" || row.Connections != "" {
 			t.Fatalf("replaced columns set %+v", row)
 		}
-		var related int64
-		if err := db.AutoMigrate(&domain.ScanRelatedAddressEntity{}); err != nil {
-			t.Fatal(err)
-		}
-		if err := db.Model(&domain.ScanRelatedAddressEntity{}).Where("scan_id = ?", scanID).Count(&related).Error; err != nil || related != 0 {
-			t.Fatalf("related rows %d err %v, want none before OC-P22b", related, err)
+		// CA1.3: the designator chain stores its delegation_target row (OC-P22b).
+		rows := relatedRows(t, db, scanID)
+		if len(rows) != 1 || rows[0].ChainID != 1 || rows[0].Address != "0x2222222222222222222222222222222222222222" {
+			t.Fatalf("related rows %+v, want the chain 1 delegation target", rows)
 		}
 	})
 
@@ -920,4 +918,111 @@ func TestApplyWalletTransition_StoresEmptyListsAsArrays(t *testing.T) {
 			}
 		})
 	}
+}
+
+// relatedRows returns the live related rows of a scan, ordered by chain and address.
+func relatedRows(t *testing.T, db *gorm.DB, scanID uuid.UUID) []domain.ScanRelatedAddressEntity {
+	t.Helper()
+	if err := db.AutoMigrate(&domain.ScanRelatedAddressEntity{}); err != nil {
+		t.Fatal(err)
+	}
+	var rows []domain.ScanRelatedAddressEntity
+	if err := db.Where("scan_id = ?", scanID).Order("chain_id, address").Find(&rows).Error; err != nil {
+		t.Fatal(err)
+	}
+	return rows
+}
+
+func TestApplyWalletTransition_StoresDelegationTargets(t *testing.T) {
+	db := setupScanAPITestDB(t)
+	ts := startTransitionAPI(t, db)
+	defer ts.Close()
+	user := uuid.New()
+	const (
+		targetA = "0x1111111111111111111111111111111111111111"
+		targetB = "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd"
+	)
+	// designators makes chains 1 and 10 delegated eoa chains: a designator exposes the key and needs no nonce.
+	designators := func(r addressv1.Result) addressv1.Result {
+		r.Chains = []addressv1.Chain{
+			{ChainID: 1, Qualification: addressv1.QualificationEOA, KeyExposed: flag(true)},
+			{ChainID: 10, Qualification: addressv1.QualificationEOA, KeyExposed: flag(true)},
+		}
+		return r
+	}
+	delegation := func(chain int64, addr string) addressv1.Related {
+		return addressv1.Related{Role: addressv1.RelatedRoleDelegationTarget, ChainID: chain, Address: addr}
+	}
+	assertTargets := func(t *testing.T, rows []domain.ScanRelatedAddressEntity, scanID uuid.UUID) {
+		t.Helper()
+		want := []domain.ScanRelatedAddressEntity{
+			{ScanID: scanID, ChainID: 1, Role: "delegation_target", Address: targetA},
+			{ScanID: scanID, ChainID: 10, Role: "delegation_target", Address: targetB},
+		}
+		if len(rows) != len(want) {
+			t.Fatalf("related rows %+v, want %d", rows, len(want))
+		}
+		for i, w := range want {
+			g := rows[i]
+			if g.ScanID != w.ScanID || g.ChainID != w.ChainID || g.Role != w.Role || g.Address != w.Address ||
+				g.EnrichmentID != nil || g.CreationTxHash != "" || g.DeletedAt.Valid {
+				t.Fatalf("row %d %+v, want %+v with no enrichment, empty tx hash, not deleted", i, g, w)
+			}
+		}
+	}
+
+	t.Run("eoa stores one row per entry", func(t *testing.T) {
+		r := designators(eoaResult(transitionAddr))
+		// The mixed-case address must be stored lowercased.
+		r.RelatedAddresses = []addressv1.Related{delegation(1, targetA), delegation(10, "0xABCDEFabcdefABCDEFabcdefABCDEFabcdefABCD")}
+		scanID, outcome := postSuccess(t, db, ts, user, "dt-eoa", resultWire(t, r))
+		if outcome != "applied" {
+			t.Fatalf("outcome %q", outcome)
+		}
+		assertTargets(t, relatedRows(t, db, scanID), scanID)
+	})
+
+	t.Run("replays add or change no row", func(t *testing.T) {
+		r := designators(eoaResult(transitionAddr))
+		r.RelatedAddresses = []addressv1.Related{delegation(1, targetA), delegation(10, targetB)}
+		scanID, outcome := postSuccess(t, db, ts, user, "dt-replay", resultWire(t, r))
+		if outcome != "applied" {
+			t.Fatalf("outcome %q", outcome)
+		}
+		assertTargets(t, relatedRows(t, db, scanID), scanID)
+
+		// already_applied: the same transition_id with another result.
+		other := designators(eoaResult(transitionAddr))
+		other.Chains = other.Chains[:1]
+		other.RelatedAddresses = []addressv1.Related{delegation(1, "0x3333333333333333333333333333333333333333")}
+		code, got := postTransition(t, transitionURL(ts.URL, scanID), user, successWith("dt-replay", user, resultWire(t, other)))
+		assertHTTPOutcome(t, code, got, "already_applied", scan.StateSUCCESS, true)
+		assertTargets(t, relatedRows(t, db, scanID), scanID)
+
+		// already_terminal: a different transition on the terminal scan.
+		code, got = postTransition(t, transitionURL(ts.URL, scanID), user, successWith("dt-late", user, resultWire(t, other)))
+		assertHTTPOutcome(t, code, got, "already_terminal", scan.StateSUCCESS, true)
+		assertTargets(t, relatedRows(t, db, scanID), scanID)
+	})
+
+	t.Run("contract with a not_deployed designator chain", func(t *testing.T) {
+		// OP-3.1 (a): the contract result keeps its delegation_target on the not_deployed chain.
+		r := addressv1.Result{
+			Address: transitionAddr, AccountType: addressv1.AccountTypeContract, ObservedAt: observedAtUTC,
+			Chains: []addressv1.Chain{
+				{ChainID: 1, Qualification: addressv1.QualificationContract},
+				{ChainID: 10, Qualification: addressv1.QualificationNotDeployed},
+			},
+			RelatedAddresses: []addressv1.Related{delegation(10, targetB)},
+			Anomalies:        []addressv1.Anomaly{addressv1.AnomalyContractWithEOAActivity},
+		}
+		scanID, outcome := postSuccess(t, db, ts, user, "dt-contract", resultWire(t, r))
+		if outcome != "applied" {
+			t.Fatalf("outcome %q", outcome)
+		}
+		rows := relatedRows(t, db, scanID)
+		if len(rows) != 1 || rows[0].ChainID != 10 || rows[0].Role != "delegation_target" || rows[0].Address != targetB {
+			t.Fatalf("related rows %+v, want the chain 10 delegation target", rows)
+		}
+	})
 }
