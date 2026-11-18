@@ -15,12 +15,17 @@ import (
 )
 
 func main() {
+	pass := os.Getenv("POSTGRES_PASSWORD")
+	if pass == "" {
+		fmt.Fprintln(os.Stderr, "POSTGRES_PASSWORD not set in the environment")
+		os.Exit(1)
+	}
 	dsn := fmt.Sprintf(
 		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
 		env("POSTGRES_HOST", "127.0.0.1"),
 		env("POSTGRES_PORT", "5432"),
 		env("POSTGRES_USER", "cafe"),
-		env("POSTGRES_PASSWORD", "cafe"),
+		pass,
 		env("POSTGRES_DATABASE", "cafe"),
 		env("POSTGRES_SSLMODE", "disable"),
 	)

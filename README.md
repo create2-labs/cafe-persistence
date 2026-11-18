@@ -180,6 +180,8 @@ go run ./scripts/gen_cp_indexes_golden.go
 
 Manual / CI-adjacent checks for the PR plan test boxes:
 
+Scripts 01 and 02 read the PostgreSQL settings from the environment; export them as in *CP DDL verification*.
+
 ```bash
 # All (Postgres required for 01; use --skip-legacy if down)
 ./scripts/test-rd-p3-all.sh
