@@ -245,111 +245,191 @@ func TestScanAPI_GetWalletScan_NotFound(t *testing.T) {
 	}
 }
 
-func TestScanAPI_GetWalletScan_OK(t *testing.T) {
-	db := setupScanAPITestDB(t)
-	userID := uuid.New()
-	scanID := uuid.New()
-	row := domain.ScanResultEntity{
-		ID: scanID, UserID: userID, Address: "0xabc", Status: scan.StateSUCCESS,
-		Type: domain.AccountTypeEOA, Algorithm: domain.AlgorithmECDSAsecp256k1, NISTLevel: domain.NISTLevel1,
-	}
-	if err := db.Create(&row).Error; err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-	ts := newTestScanAPIServer(t, newMemoryPendingRepo(), db)
-	defer ts.Close()
-
-	url := ts.URL + scanroutes.V1Base + scanroutes.WalletScanByID
-	url = strings.Replace(url, "{scan_id}", scanID.String(), 1)
+// getWalletScanRow reads the by-id route and decodes a 200 body.
+func getWalletScanRow(t *testing.T, ts *httptest.Server, userID, scanID uuid.UUID) (int, map[string]any) {
+	t.Helper()
+	url := strings.Replace(ts.URL+scanroutes.V1Base+scanroutes.WalletScanByID, "{scan_id}", scanID.String(), 1)
 	resp := doAuthRequest(t, http.MethodGet, url, userID, nil)
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, want 200", resp.StatusCode)
-	}
 	var body map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if body["id"] != scanID.String() {
-		t.Fatalf("id = %v", body["id"])
+	return resp.StatusCode, body
+}
+
+func seedWalletRow(t *testing.T, db *gorm.DB, row domain.ScanResultEntity) {
+	t.Helper()
+	if err := db.Create(&row).Error; err != nil {
+		t.Fatalf("seed: %v", err)
 	}
-	if body["status"] != scan.StateSUCCESS {
-		t.Fatalf("status = %v", body["status"])
+}
+
+func assertRowKeys(t *testing.T, body map[string]any) {
+	t.Helper()
+	for _, k := range []string{"type", "is_eoa", "is_erc4337", "networks", "delegations", "connections"} {
+		if _, ok := body[k]; ok {
+			t.Errorf("removed key %q present", k)
+		}
 	}
+	for _, k := range []string{"id", "user_id", "address", "account_type", "chains", "unobserved_chain_ids", "anomalies",
+		"key_exposed", "algorithm", "nist_level", "risk_score", "status", "created_at", "updated_at"} {
+		if _, ok := body[k]; !ok {
+			t.Errorf("key %q missing", k)
+		}
+	}
+}
+
+func TestScanAPI_GetWalletScan_OK(t *testing.T) {
+	db := setupScanAPITestDB(t)
+	userID, scanID := uuid.New(), uuid.New()
+	seedWalletRow(t, db, domain.ScanResultEntity{
+		ID: scanID, UserID: userID, Address: "0xabc", Status: scan.StateSUCCESS,
+		Algorithm: domain.AlgorithmECDSAsecp256k1, NISTLevel: domain.NISTLevel1,
+		AccountType: "eoa", Chains: "[]", UnobservedChainIDs: "[]", Anomalies: "[]",
+	})
+	ts := newTestScanAPIServer(t, newMemoryPendingRepo(), db)
+	defer ts.Close()
+
+	code, body := getWalletScanRow(t, ts, userID, scanID)
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", code)
+	}
+	if body["id"] != scanID.String() || body["status"] != scan.StateSUCCESS || body["account_type"] != "eoa" {
+		t.Fatalf("body = %#v", body)
+	}
+	assertRowKeys(t, body)
 }
 
 func TestScanAPI_GetWalletScan_PublicKeyRecovery(t *testing.T) {
 	db := setupScanAPITestDB(t)
-	userID := uuid.New()
-	scanID := uuid.New()
-	row := domain.ScanResultEntity{
+	userID, scanID := uuid.New(), uuid.New()
+	seedWalletRow(t, db, domain.ScanResultEntity{
 		ID: scanID, UserID: userID, Address: "0xabc", Status: scan.StateSUCCESS,
-		Type: domain.AccountTypeEOA, Algorithm: domain.AlgorithmECDSAsecp256k1, NISTLevel: domain.NISTLevel1,
-		PublicKeyRecovery: domain.PublicKeyRecoveryNotRequired,
-	}
-	if err := db.Create(&row).Error; err != nil {
-		t.Fatalf("seed: %v", err)
-	}
+		Algorithm: domain.AlgorithmECDSAsecp256k1, NISTLevel: domain.NISTLevel1,
+		PublicKeyRecovery: domain.PublicKeyRecoveryNotRequired, AccountType: "eoa",
+	})
 	ts := newTestScanAPIServer(t, newMemoryPendingRepo(), db)
 	defer ts.Close()
 
-	url := ts.URL + scanroutes.V1Base + scanroutes.WalletScanByID
-	url = strings.Replace(url, "{scan_id}", scanID.String(), 1)
-	resp := doAuthRequest(t, http.MethodGet, url, userID, nil)
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, want 200", resp.StatusCode)
-	}
-	var body map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		t.Fatalf("decode: %v", err)
+	code, body := getWalletScanRow(t, ts, userID, scanID)
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", code)
 	}
 	if body["public_key_recovery"] != string(domain.PublicKeyRecoveryNotRequired) {
 		t.Fatalf("public_key_recovery = %#v", body["public_key_recovery"])
 	}
-	if _, ok := body["first_seen"]; ok {
-		t.Fatalf("first_seen = %#v", body["first_seen"])
+	for _, k := range []string{"first_seen", "last_seen"} {
+		if _, ok := body[k]; ok {
+			t.Fatalf("%s = %#v", k, body[k])
+		}
 	}
-	if _, ok := body["last_seen"]; ok {
-		t.Fatalf("last_seen = %#v", body["last_seen"])
-	}
+	assertRowKeys(t, body)
 }
 
-func TestScanAPI_GetWalletScan_DelegationsAndUnknown(t *testing.T) {
+// CA1.1 to CA1.4: a row with no SUCCESS yet has account_type ” and no replaced key.
+func TestScanAPI_GetWalletScan_RunningRowHasEmptyQualification(t *testing.T) {
 	db := setupScanAPITestDB(t)
-	userID := uuid.New()
-	scanID := uuid.New()
-	delegations := `[{"chain_id":1,"delegated_address":"0x1111111111111111111111111111111111111111"}]`
-	row := domain.ScanResultEntity{
-		ID: scanID, UserID: userID, Address: "0xabc", Status: scan.StateSUCCESS,
-		Type: domain.AccountTypeUnknown, Algorithm: "", NISTLevel: 0,
-		Delegations: delegations, Networks: "[]", Connections: "[]",
-	}
-	if err := db.Create(&row).Error; err != nil {
-		t.Fatalf("seed: %v", err)
-	}
+	userID, scanID := uuid.New(), uuid.New()
+	seedWalletRow(t, db, domain.ScanResultEntity{ID: scanID, UserID: userID, Address: "0xabc", Status: scan.StateRUNNING})
 	ts := newTestScanAPIServer(t, newMemoryPendingRepo(), db)
 	defer ts.Close()
 
-	url := ts.URL + scanroutes.V1Base + scanroutes.WalletScanByID
-	url = strings.Replace(url, "{scan_id}", scanID.String(), 1)
-	resp := doAuthRequest(t, http.MethodGet, url, userID, nil)
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	code, body := getWalletScanRow(t, ts, userID, scanID)
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", code)
 	}
-	var body map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		t.Fatalf("decode: %v", err)
+	if body["account_type"] != "" {
+		t.Fatalf("account_type = %#v, want empty", body["account_type"])
 	}
-	if body["type"] != string(domain.AccountTypeUnknown) {
-		t.Fatalf("type = %#v", body["type"])
+	assertRowKeys(t, body)
+	// CA1.5: observed_at is absent while NULL.
+	if _, ok := body["observed_at"]; ok {
+		t.Fatalf("observed_at = %#v, want absent", body["observed_at"])
 	}
-	if body["delegations"] != delegations {
-		t.Fatalf("delegations = %#v", body["delegations"])
+	// The empty column gives an empty array for each of the three lists.
+	for _, k := range []string{"chains", "unobserved_chain_ids", "anomalies"} {
+		list, ok := body[k].([]any)
+		if !ok || len(list) != 0 {
+			t.Errorf("%s = %#v, want []", k, body[k])
+		}
 	}
-	if _, ok := body["is_erc4337"]; !ok {
-		t.Fatal("is_erc4337 must remain on the row")
+}
+
+// CA2.1, CA2.6, CA1.5: the stored qualification is returned as JSON arrays, never as strings.
+func TestScanAPI_GetWalletScan_QualificationArrays(t *testing.T) {
+	db := setupScanAPITestDB(t)
+	userID, scanID := uuid.New(), uuid.New()
+	seedWalletRow(t, db, domain.ScanResultEntity{
+		ID: scanID, UserID: userID, Address: "0xabc", Status: scan.StateSUCCESS, KeyExposed: true,
+		AccountType:        "eoa",
+		Chains:             `[{"chain_id":1,"qualification":"eoa","nonce":3,"key_exposed":true},{"chain_id":10,"qualification":"eoa","key_exposed":true}]`,
+		UnobservedChainIDs: `[137]`,
+		Anomalies:          `["contract_with_eoa_activity"]`, // CA1.7
+		ObservedAt:         func() *time.Time { v := time.Date(2026, 10, 23, 10, 0, 0, 123456789, time.UTC); return &v }(),
+	})
+	ts := newTestScanAPIServer(t, newMemoryPendingRepo(), db)
+	defer ts.Close()
+
+	code, body := getWalletScanRow(t, ts, userID, scanID)
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", code)
+	}
+	chains, ok := body["chains"].([]any)
+	if !ok || len(chains) != 2 {
+		t.Fatalf("chains = %#v, want 2 entries as an array", body["chains"])
+	}
+	designator := chains[1].(map[string]any)
+	if designator["key_exposed"] != true {
+		t.Fatalf("designator chain = %#v, want key_exposed true", designator)
+	}
+	if _, ok := designator["nonce"]; ok {
+		t.Fatalf("designator chain = %#v, want no nonce", designator)
+	}
+	if got, ok := body["unobserved_chain_ids"].([]any); !ok || len(got) != 1 || got[0] != float64(137) {
+		t.Fatalf("unobserved_chain_ids = %#v", body["unobserved_chain_ids"])
+	}
+	if got, ok := body["anomalies"].([]any); !ok || len(got) != 1 || got[0] != "contract_with_eoa_activity" {
+		t.Fatalf("anomalies = %#v", body["anomalies"])
+	}
+	if body["observed_at"] != "2026-10-23T10:00:00.123456789Z" {
+		t.Fatalf("observed_at = %#v, want RFC 3339 nanoseconds UTC", body["observed_at"])
+	}
+}
+
+// An unreadable stored list is a defect: 503 on both routes, while a valid row answers 200.
+func TestScanAPI_WalletScan_UnreadableChainsIs503(t *testing.T) {
+	db := setupScanAPITestDB(t)
+	goodUser, badUser := uuid.New(), uuid.New()
+	goodID, badID := uuid.New(), uuid.New()
+	seedWalletRow(t, db, domain.ScanResultEntity{ID: goodID, UserID: goodUser, Address: "0xabc", Status: scan.StateSUCCESS, AccountType: "eoa", Chains: "[]"})
+	seedWalletRow(t, db, domain.ScanResultEntity{ID: badID, UserID: badUser, Address: "0xdef", Status: scan.StateSUCCESS, AccountType: "eoa", Chains: "not json"})
+	ts := newTestScanAPIServer(t, newMemoryPendingRepo(), db)
+	defer ts.Close()
+
+	if code, _ := getWalletScanRow(t, ts, goodUser, goodID); code != http.StatusOK {
+		t.Fatalf("valid by-id status = %d, want 200", code)
+	}
+	code, body := getWalletScanRow(t, ts, badUser, badID)
+	if code != http.StatusServiceUnavailable || body["error"] != "service_unavailable" {
+		t.Fatalf("bad by-id = %d %#v, want 503 service_unavailable", code, body)
+	}
+
+	list := func(user uuid.UUID) (int, map[string]any) {
+		resp := doAuthRequest(t, http.MethodGet, ts.URL+scanroutes.V1Base+scanroutes.WalletScans, user, nil)
+		defer func() { _ = resp.Body.Close() }()
+		var out map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		return resp.StatusCode, out
+	}
+	if code, _ := list(goodUser); code != http.StatusOK {
+		t.Fatalf("valid list status = %d, want 200", code)
+	}
+	code, body = list(badUser)
+	if code != http.StatusServiceUnavailable || body["error"] != "service_unavailable" {
+		t.Fatalf("bad list = %d %#v, want 503 service_unavailable", code, body)
 	}
 }
 

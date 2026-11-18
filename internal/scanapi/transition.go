@@ -100,7 +100,10 @@ func (h *Handler) projectTerminal(ctx context.Context, row *domain.ScanResultEnt
 	}
 	var err error
 	if row.Status == scan.StateSUCCESS {
-		err = h.cache.SaveWalletScan(ctx, row.UserID, row.Address, walletScanRowJSON(row))
+		var payload map[string]any
+		if payload, err = walletScanRowJSON(row); err == nil {
+			err = h.cache.SaveWalletScan(ctx, row.UserID, row.Address, payload)
+		}
 	} else {
 		err = h.cache.SaveWalletFailure(ctx, row.UserID, row.Address, row.Error)
 	}
