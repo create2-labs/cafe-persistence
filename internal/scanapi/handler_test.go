@@ -586,3 +586,111 @@ func TestScanAPI_PutTLSPending_Created(t *testing.T) {
 		t.Fatalf("status = %d, want 201", resp.StatusCode)
 	}
 }
+
+// CA1.3: the by-id route returns the related addresses, ordered by chain_id, role, address;
+// the list route does not; an empty set is []; a soft-deleted row is excluded.
+func TestScanAPI_GetWalletScan_RelatedAddresses(t *testing.T) {
+	db := setupScanAPITestDB(t)
+	userID, otherScan, enrichmentID := uuid.New(), uuid.New(), uuid.New()
+	scanID, emptyID := uuid.New(), uuid.New()
+	seedWalletRow(t, db, domain.ScanResultEntity{ID: scanID, UserID: userID, Address: "0xabc", Status: scan.StateSUCCESS, AccountType: "contract"})
+	seedWalletRow(t, db, domain.ScanResultEntity{ID: emptyID, UserID: userID, Address: "0xdef", Status: scan.StateSUCCESS, AccountType: "eoa"})
+	rows := []domain.ScanRelatedAddressEntity{
+		{ScanID: scanID, ChainID: 10, Role: "delegation_target", Address: "0xbb"},
+		{ScanID: scanID, ChainID: 1, Role: "delegation_target", Address: "0xcc"},
+		{ScanID: scanID, ChainID: 1, Role: "delegation_target", Address: "0xaa"},
+		{ScanID: scanID, ChainID: 1, Role: "deployer", Address: "0xdd", CreationTxHash: "0xtx", EnrichmentID: &enrichmentID},
+		{ScanID: scanID, ChainID: 5, Role: "delegation_target", Address: "0xee"},
+		{ScanID: otherScan, ChainID: 1, Role: "deployer", Address: "0xff"},
+	}
+	for _, r := range rows {
+		if err := db.Create(&r).Error; err != nil {
+			t.Fatalf("seed related: %v", err)
+		}
+	}
+	// A soft-deleted row is never returned.
+	if err := db.Where("address = ?", "0xee").Delete(&domain.ScanRelatedAddressEntity{}).Error; err != nil {
+		t.Fatalf("soft delete: %v", err)
+	}
+	ts := newTestScanAPIServer(t, newMemoryPendingRepo(), db)
+	defer ts.Close()
+
+	code, body := getWalletScanRow(t, ts, userID, scanID)
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", code)
+	}
+	list, ok := body["related_addresses"].([]any)
+	if !ok {
+		t.Fatalf("related_addresses = %#v, want array", body["related_addresses"])
+	}
+	var got []string
+	for _, it := range list {
+		m := it.(map[string]any)
+		got = append(got, m["role"].(string)+":"+m["address"].(string))
+	}
+	want := []string{"delegation_target:0xaa", "delegation_target:0xcc", "deployer:0xdd", "delegation_target:0xbb"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("order = %v, want %v", got, want)
+	}
+	// Optional fields: absent when empty or NULL, present otherwise.
+	first, deployer := list[0].(map[string]any), list[2].(map[string]any)
+	for _, k := range []string{"creation_tx_hash", "enrichment_id"} {
+		if _, ok := first[k]; ok {
+			t.Errorf("delegation_target %s = %#v, want absent", k, first[k])
+		}
+	}
+	if first["chain_id"] != float64(1) {
+		t.Errorf("chain_id = %#v, want 1", first["chain_id"])
+	}
+	if deployer["creation_tx_hash"] != "0xtx" || deployer["enrichment_id"] != enrichmentID.String() {
+		t.Errorf("deployer = %#v", deployer)
+	}
+
+	// No row: [].
+	_, empty := getWalletScanRow(t, ts, userID, emptyID)
+	if l, ok := empty["related_addresses"].([]any); !ok || len(l) != 0 {
+		t.Errorf("related_addresses = %#v, want []", empty["related_addresses"])
+	}
+
+	// The list route returns the row keys only.
+	resp := doAuthRequest(t, http.MethodGet, ts.URL+scanroutes.V1Base+scanroutes.WalletScans, userID, nil)
+	defer func() { _ = resp.Body.Close() }()
+	var page struct {
+		Items []map[string]any `json:"items"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&page); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if len(page.Items) != 2 {
+		t.Fatalf("list items = %d, want 2", len(page.Items))
+	}
+	for _, it := range page.Items {
+		if _, ok := it["related_addresses"]; ok {
+			t.Errorf("list item has related_addresses")
+		}
+	}
+}
+
+// CA1.3: a contract result stores and returns its not_deployed designator row (OP-3.1 (a)).
+func TestScanAPI_GetWalletScan_RelatedAddresses_ContractDesignator(t *testing.T) {
+	db := setupScanAPITestDB(t)
+	userID, scanID := uuid.New(), uuid.New()
+	seedWalletRow(t, db, domain.ScanResultEntity{
+		ID: scanID, UserID: userID, Address: "0xabc", Status: scan.StateSUCCESS, AccountType: "contract",
+		Chains: `[{"chain_id":1,"qualification":"contract"},{"chain_id":10,"qualification":"not_deployed"}]`,
+	})
+	if err := db.Create(&domain.ScanRelatedAddressEntity{ScanID: scanID, ChainID: 10, Role: "delegation_target", Address: "0xd0"}).Error; err != nil {
+		t.Fatalf("seed related: %v", err)
+	}
+	ts := newTestScanAPIServer(t, newMemoryPendingRepo(), db)
+	defer ts.Close()
+
+	code, body := getWalletScanRow(t, ts, userID, scanID)
+	list, _ := body["related_addresses"].([]any)
+	if code != http.StatusOK || len(list) != 1 {
+		t.Fatalf("status = %d, related_addresses = %#v, want 1 row", code, body["related_addresses"])
+	}
+	if m := list[0].(map[string]any); m["chain_id"] != float64(10) || m["address"] != "0xd0" {
+		t.Errorf("row = %#v", m)
+	}
+}

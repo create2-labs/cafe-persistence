@@ -414,7 +414,35 @@ func (h *Handler) GetWalletScan(w http.ResponseWriter, r *http.Request) {
 		writeServiceUnavailable(w, r, "wallet scan store is temporarily unavailable")
 		return
 	}
+	related, lerr := h.walletScans.ListRelatedAddresses(ent.ID)
+	if lerr != nil {
+		log.Error().Err(lerr).Str("scan_id", ent.ID.String()).Msg("related addresses cannot be read")
+		writeServiceUnavailable(w, r, "wallet scan store is temporarily unavailable")
+		return
+	}
+	row["related_addresses"] = relatedAddressesJSON(related)
 	writeJSON(w, http.StatusOK, row)
+}
+
+// relatedAddressesJSON builds the related_addresses array of design 5.4: always an
+// array, with creation_tx_hash and enrichment_id only when set.
+func relatedAddressesJSON(rows []domain.ScanRelatedAddressEntity) []map[string]any {
+	out := make([]map[string]any, 0, len(rows))
+	for _, r := range rows {
+		item := map[string]any{
+			"chain_id": r.ChainID,
+			"role":     r.Role,
+			"address":  r.Address,
+		}
+		if r.CreationTxHash != "" {
+			item["creation_tx_hash"] = r.CreationTxHash
+		}
+		if r.EnrichmentID != nil {
+			item["enrichment_id"] = r.EnrichmentID.String()
+		}
+		out = append(out, item)
+	}
+	return out
 }
 
 func (h *Handler) DeleteWalletScan(w http.ResponseWriter, r *http.Request) {
