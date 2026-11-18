@@ -2,6 +2,7 @@ package scanapi
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 
@@ -13,6 +14,7 @@ import (
 
 	"github.com/create2-labs/cafe-contracts/cafenatsv01"
 	lifecycle "github.com/create2-labs/cafe-contracts/discovery/scanlifecycle/v1"
+	addressv1 "github.com/create2-labs/cafe-contracts/observation/address/v1"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
@@ -28,14 +30,14 @@ func (h *Handler) EnableWalletEvents(events natsconn.Connection) {
 }
 
 type transitionBody struct {
-	TransitionID string             `json:"transition_id"`
-	UserID       string             `json:"user_id"`
-	Address      string             `json:"address"`
-	SourceStates []string           `json:"source_states"`
-	TargetState  string             `json:"target_state"`
-	QuotaAction  string             `json:"quota_action"`
-	Result       *domain.ScanResult `json:"result,omitempty"`
-	Error        *string            `json:"error,omitempty"`
+	TransitionID string          `json:"transition_id"`
+	UserID       string          `json:"user_id"`
+	Address      string          `json:"address"`
+	SourceStates []string        `json:"source_states"`
+	TargetState  string          `json:"target_state"`
+	QuotaAction  string          `json:"quota_action"`
+	Result       json.RawMessage `json:"result,omitempty"`
+	Error        *string         `json:"error,omitempty"`
 }
 
 type transitionResponse struct {
@@ -61,7 +63,7 @@ func (h *Handler) ApplyWalletTransition(w http.ResponseWriter, r *http.Request) 
 		writeBadRequest(w, r, "invalid request body")
 		return
 	}
-	cmd, valid := transitionCommand(headerUser, &body)
+	cmd, valid := transitionCommand(headerUser, scanID, &body)
 	if !valid {
 		writeTransition(w, wallettransition.Result{Outcome: wallettransition.OutcomeRejected}, false, false)
 		return
@@ -98,7 +100,7 @@ func (h *Handler) projectTerminal(ctx context.Context, row *domain.ScanResultEnt
 	}
 	var err error
 	if row.Status == scan.StateSUCCESS {
-		err = h.cache.SaveWalletScan(ctx, row.UserID, row.Address, row.ToScanResult())
+		err = h.cache.SaveWalletScan(ctx, row.UserID, row.Address, walletScanRowJSON(row))
 	} else {
 		err = h.cache.SaveWalletFailure(ctx, row.UserID, row.Address, row.Error)
 	}
@@ -153,7 +155,7 @@ func (h *Handler) publishWalletObserved(row *domain.ScanResultEntity) {
 }
 
 // transitionCommand validates a decoded body. A false result is a permanent rejection with no write.
-func transitionCommand(headerUser uuid.UUID, body *transitionBody) (wallettransition.Command, bool) {
+func transitionCommand(headerUser, scanID uuid.UUID, body *transitionBody) (wallettransition.Command, bool) {
 	userID, err := uuid.Parse(strings.TrimSpace(body.UserID))
 	if err != nil || userID == uuid.Nil || userID != headerUser {
 		return wallettransition.Command{}, false
@@ -183,12 +185,18 @@ func transitionCommand(headerUser uuid.UUID, body *transitionBody) (wallettransi
 		if body.Error != nil || body.Result == nil {
 			return wallettransition.Command{}, false
 		}
-		resultAddr := normalizeAddress(body.Result.Address)
-		if resultAddr != address {
+		result, err := addressv1.DecodeResult(body.Result)
+		if err != nil {
+			log.Warn().Err(err).Str("scan_id", scanID.String()).Msg("wallet transition result rejected")
 			return wallettransition.Command{}, false
 		}
-		body.Result.Address = resultAddr
-		cmd.Result = body.Result
+		if normalizeAddress(result.Address) != address {
+			return wallettransition.Command{}, false
+		}
+		for i := range result.RelatedAddresses {
+			result.RelatedAddresses[i].Address = normalizeAddress(result.RelatedAddresses[i].Address)
+		}
+		cmd.Result = &result
 	default:
 		if body.Result != nil || body.Error == nil || strings.TrimSpace(*body.Error) == "" {
 			return wallettransition.Command{}, false

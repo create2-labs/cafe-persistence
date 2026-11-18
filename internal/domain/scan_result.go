@@ -41,7 +41,7 @@ type ScanResultEntity struct {
 	Chains             string     `gorm:"type:text;not null;default:''" json:"-"`        // JSON array of addressv1.Chain
 	UnobservedChainIDs string     `gorm:"type:text;not null;default:''" json:"-"`        // JSON array of int64
 	Anomalies          string     `gorm:"type:text;not null;default:''" json:"-"`        // JSON array of addressv1.Anomaly
-	ObservedAt         *time.Time `gorm:"type:timestamptz" json:"-"`                     // result observed_at, UTC
+	ObservedAt         *time.Time `json:"-"`                                             // result observed_at, UTC
 }
 
 // TableName specifies the table name for GORM

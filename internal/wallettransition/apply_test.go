@@ -8,6 +8,7 @@ import (
 	"cafe-persistence/internal/repository"
 	"cafe-persistence/pkg/scan"
 
+	addressv1 "github.com/create2-labs/cafe-contracts/observation/address/v1"
 	"github.com/google/uuid"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -29,12 +30,15 @@ func TestApplyMissing_InsertConflictQualifiesWinner(t *testing.T) {
 	ledger := repository.NewScanUsageLedgerRepository(db)
 	user := uuid.New()
 	addr := "0xabc0000000000000000000000000000000000001"
+	nonce, exposed := uint64(3), true
 	success := Command{
 		UserID: user, Address: addr, SourceStates: []string{scan.StatePENDING, scan.StateRUNNING},
 		TargetState: scan.StateSUCCESS, QuotaAction: QuotaKeep,
-		Result: &domain.ScanResult{
-			Address: addr, Type: domain.AccountTypeEOA, Algorithm: domain.AlgorithmECDSAsecp256k1,
-			NISTLevel: domain.NISTLevel1, IsEOA: true, RiskScore: 4,
+		Result: &addressv1.Result{
+			Address: addr, AccountType: addressv1.AccountTypeEOA,
+			ObservedAt: time.Date(2026, 10, 23, 10, 0, 0, 0, time.UTC),
+			Chains:     []addressv1.Chain{{ChainID: 1, Qualification: addressv1.QualificationEOA, Nonce: &nonce, KeyExposed: &exposed}},
+			EOA:        &addressv1.EOA{KeyExposed: true, Algorithm: "ECDSA-secp256k1", NISTLevel: 1, RiskScore: 0.4},
 		},
 	}
 
@@ -75,7 +79,7 @@ func TestApplyMissing_InsertConflictQualifiesWinner(t *testing.T) {
 				return err
 			}
 			success.TransitionID = "loser-terminal"
-			success.Result.RiskScore = 9
+			success.Result.EOA.RiskScore = 0.9
 			res, err := applyMissing(tx, ledger, scanID, success)
 			if err != nil || res.Outcome != OutcomeAlreadyTerminal || res.Status != scan.StateSUCCESS {
 				t.Fatalf("result %+v err %v", res, err)
