@@ -316,8 +316,16 @@ func (h *Handler) ListWalletScans(w http.ResponseWriter, r *http.Request) {
 			if !walletEntityIsCompleted(ent) {
 				continue
 			}
-			if chainID != nil && !walletEntityMatchesChainID(ent, *chainID, h.chainCfg) {
-				continue
+			if chainID != nil {
+				match, merr := walletEntityMatchesChainID(ent, *chainID)
+				if merr != nil {
+					log.Error().Err(merr).Str("scan_id", ent.ID.String()).Msg("wallet scan chains cannot be decoded")
+					writeServiceUnavailable(w, r, "wallet scan store is temporarily unavailable")
+					return
+				}
+				if !match {
+					continue
+				}
 			}
 			entities = []*domain.ScanResultEntity{ent}
 			total = 1
@@ -331,7 +339,13 @@ func (h *Handler) ListWalletScans(w http.ResponseWriter, r *http.Request) {
 		}
 		filtered := make([]*domain.ScanResultEntity, 0, len(all))
 		for _, ent := range all {
-			if walletEntityMatchesChainID(ent, *chainID, h.chainCfg) {
+			match, merr := walletEntityMatchesChainID(ent, *chainID)
+			if merr != nil {
+				log.Error().Err(merr).Str("scan_id", ent.ID.String()).Msg("wallet scan chains cannot be decoded")
+				writeServiceUnavailable(w, r, "wallet scan store is temporarily unavailable")
+				return
+			}
+			if match {
 				filtered = append(filtered, ent)
 			}
 		}

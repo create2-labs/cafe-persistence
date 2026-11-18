@@ -111,49 +111,6 @@ func (s *ScanResultEntity) ToScanResult() *ScanResult {
 	}
 }
 
-// FromScanResult creates an entity from a domain ScanResult DTO
-func FromScanResult(userID uuid.UUID, result *ScanResult) *ScanResultEntity {
-	return &ScanResultEntity{
-		UserID:            userID,
-		Address:           result.Address,
-		Type:              result.Type,
-		Algorithm:         result.Algorithm,
-		NISTLevel:         result.NISTLevel,
-		KeyExposed:        result.KeyExposed,
-		PublicKey:         result.PublicKey,
-		TransactionHash:   result.TransactionHash,
-		ExposedNetwork:    result.ExposedNetwork,
-		PublicKeyRecovery: result.PublicKeyRecovery,
-		IsEOA:             result.IsEOA,
-		IsERC4337:         result.IsERC4337,
-		RiskScore:         result.RiskScore,
-		Networks:          stringArrayToString(result.Networks),
-		Delegations:       delegationsToString(result.Delegations),
-		Connections:       stringArrayToString(result.Connections),
-	}
-}
-
-// EnsureScanResultDelegations replaces a nil Delegations slice with an empty slice.
-// A missing field on scan.completed decodes to nil; Postgres, Redis, and APIs store [].
-func EnsureScanResultDelegations(r *ScanResult) {
-	if r == nil || r.Delegations != nil {
-		return
-	}
-	r.Delegations = []Delegation{}
-}
-
-// Helper functions for JSON array conversion
-func stringArrayToString(arr []string) string {
-	if len(arr) == 0 {
-		return "[]"
-	}
-	data, err := json.Marshal(arr)
-	if err != nil {
-		return "[]"
-	}
-	return string(data)
-}
-
 func parseStringArray(s string) []string {
 	if s == "" || s == "[]" {
 		return []string{}
@@ -163,17 +120,6 @@ func parseStringArray(s string) []string {
 		return []string{}
 	}
 	return arr
-}
-
-func delegationsToString(arr []Delegation) string {
-	if len(arr) == 0 {
-		return "[]"
-	}
-	data, err := json.Marshal(arr)
-	if err != nil {
-		return "[]"
-	}
-	return string(data)
 }
 
 func parseDelegations(s string) []Delegation {

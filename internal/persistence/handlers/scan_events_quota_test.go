@@ -163,9 +163,10 @@ func TestHandleWalletFailed_AfterSuccessKeepsUsage(t *testing.T) {
 	scanID := uuid.New()
 	address := "0xdone"
 	seedUsage(t, db, userID, scanID, domain.ScanUsageKindWallet)
-	rich := walletResult(address, domain.AccountTypeEOA)
-	entity := domain.FromScanResult(userID, rich)
-	entity.ID = scanID
+	entity := &domain.ScanResultEntity{
+		ID: scanID, UserID: userID, Address: address, Type: domain.AccountTypeEOA,
+		Algorithm: domain.AlgorithmECDSAsecp256k1, NISTLevel: domain.NISTLevel1, RiskScore: 1,
+	}
 	entity.Status = scan.StateSUCCESS
 	if err := db.Create(entity).Error; err != nil {
 		t.Fatalf("seed success: %v", err)
