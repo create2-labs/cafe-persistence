@@ -505,6 +505,25 @@ func TestApplyWalletTransition_ProjectsTerminalSuccess(t *testing.T) {
 	if !strings.Contains(cache.get(walletCacheKey(user)), `"risk_score":0.4`) {
 		t.Fatalf("redis %s", cache.get(walletCacheKey(user)))
 	}
+	// CA2.1: the cached row carries the qualification keys and none of the removed ones.
+	var cached map[string]any
+	if err := json.Unmarshal([]byte(cache.get(walletCacheKey(user))), &cached); err != nil {
+		t.Fatalf("redis row: %v", err)
+	}
+	if cached["account_type"] != "eoa" || cached["observed_at"] == nil {
+		t.Fatalf("cached row %#v", cached)
+	}
+	if chains, ok := cached["chains"].([]any); !ok || len(chains) != 2 {
+		t.Fatalf("cached chains %#v", cached["chains"])
+	}
+	if ids, ok := cached["unobserved_chain_ids"].([]any); !ok || len(ids) != 1 {
+		t.Fatalf("cached unobserved_chain_ids %#v", cached["unobserved_chain_ids"])
+	}
+	for _, k := range []string{"type", "is_eoa", "is_erc4337", "networks", "delegations", "connections"} {
+		if _, ok := cached[k]; ok {
+			t.Fatalf("cached row has removed key %q", k)
+		}
+	}
 	readyRaw := bus.body(lifecycle.SubjectScanReady, 0)
 	var ready lifecycle.Ready
 	if err := json.Unmarshal(readyRaw, &ready); err != nil || ready.Status != "success" || ready.Address != transitionAddr || ready.Kind != "wallet" {

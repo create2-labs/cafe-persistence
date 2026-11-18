@@ -261,7 +261,7 @@ paths:
           schema:
             type: integer
             format: int64
-          description: Requires address query param; filters rows whose networks include the chain.
+          description: Requires address query param; rows with an observed chain of that identifier.
         - name: latest
           in: query
           schema:
@@ -747,8 +747,28 @@ components:
           format: uuid
         address:
           type: string
-        type:
+        account_type:
           type: string
+          enum: ["", eoa, contract, blank]
+          description: Empty until the scan succeeds.
+        observed_at:
+          type: string
+          format: date-time
+          description: Observation time of the result, UTC. Absent until the scan succeeds.
+        chains:
+          type: array
+          items:
+            $ref: "#/components/schemas/AddressQualificationChain"
+          description: Empty until the scan succeeds.
+        unobserved_chain_ids:
+          type: array
+          items:
+            type: integer
+            format: int64
+        anomalies:
+          type: array
+          items:
+            type: string
         algorithm:
           type: string
         nist_level:
@@ -767,22 +787,9 @@ components:
           description: |
             ECDSA public-key recovery outcome stored with the wallet scan.
             Empty until the scan completes; otherwise not_required, recovered, or unresolved.
-        is_eoa:
-          type: boolean
-        is_erc4337:
-          type: boolean
         risk_score:
           type: number
           format: double
-        networks:
-          type: string
-          description: JSON-encoded string array stored in Postgres.
-        delegations:
-          type: string
-          description: JSON-encoded delegation array stored in Postgres.
-        connections:
-          type: string
-          description: JSON-encoded string array stored in Postgres.
         status:
           $ref: "#/components/schemas/PersistenceScanStatus"
         error:
@@ -793,6 +800,29 @@ components:
         updated_at:
           type: string
           format: date-time
+
+    AddressQualificationChain:
+      type: object
+      required: [chain_id, qualification]
+      properties:
+        chain_id:
+          type: integer
+          format: int64
+        qualification:
+          type: string
+          enum: [eoa, contract, not_deployed, blank]
+        nonce:
+          type: integer
+          format: int64
+          minimum: 0
+          description: |
+            Absent only on a contract chain, or on a chain with a delegation target
+            whose nonce could not be read.
+        key_exposed:
+          type: boolean
+          description: |
+            Present on every eoa chain and absent otherwise. True on a chain with a
+            delegation target, whatever its nonce.
 
     TlsScanRow:
       type: object

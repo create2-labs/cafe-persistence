@@ -98,29 +98,54 @@ func TestScanV1OpenAPI_RequiredSchemasDocumented(t *testing.T) {
 	}
 }
 
-func TestScanV1OpenAPI_WalletScanRowDelegations(t *testing.T) {
+// CA1.1, CA1.2, CA1.3, CA1.4: the row drops the replaced keys and carries the qualification (design 5.4).
+func TestScanV1OpenAPI_WalletScanRowQualification(t *testing.T) {
 	spec := loadScanV1OpenAPISpec(t)
-	components := spec["components"].(map[string]any)
-	schemas := components["schemas"].(map[string]any)
-	row := schemas["WalletScanRow"].(map[string]any)
-	props := row["properties"].(map[string]any)
+	schemas := spec["components"].(map[string]any)["schemas"].(map[string]any)
+	props := schemas["WalletScanRow"].(map[string]any)["properties"].(map[string]any)
 
-	delegations, ok := props["delegations"].(map[string]any)
+	for _, removed := range []string{"type", "is_eoa", "is_erc4337", "networks", "delegations", "connections"} {
+		if _, ok := props[removed]; ok {
+			t.Errorf("WalletScanRow.%s must be removed", removed)
+		}
+	}
+	for _, kept := range []string{"account_type", "observed_at", "chains", "unobserved_chain_ids", "anomalies", "key_exposed", "risk_score"} {
+		if _, ok := props[kept]; !ok {
+			t.Errorf("WalletScanRow.%s missing", kept)
+		}
+	}
+	accountType, _ := props["account_type"].(map[string]any)
+	enum, _ := accountType["enum"].([]any)
+	want := []string{"", "eoa", "contract", "blank"}
+	if len(enum) != len(want) {
+		t.Fatalf("account_type enum = %#v, want %v", enum, want)
+	}
+	for i, w := range want {
+		if enum[i] != w {
+			t.Fatalf("account_type enum = %#v, want %v", enum, want)
+		}
+	}
+}
+
+// CA2.6: the chain schema allows a chain without nonce and carries key_exposed.
+func TestScanV1OpenAPI_AddressQualificationChain(t *testing.T) {
+	spec := loadScanV1OpenAPISpec(t)
+	schemas := spec["components"].(map[string]any)["schemas"].(map[string]any)
+	chain, ok := schemas["AddressQualificationChain"].(map[string]any)
 	if !ok {
-		t.Fatal("WalletScanRow.delegations missing")
+		t.Fatal("AddressQualificationChain schema missing")
 	}
-	if delegations["type"] != "string" {
-		t.Fatalf("delegations type = %#v, want string", delegations["type"])
+	props, _ := chain["properties"].(map[string]any)
+	for _, name := range []string{"chain_id", "qualification", "nonce", "key_exposed"} {
+		if _, ok := props[name]; !ok {
+			t.Errorf("AddressQualificationChain.%s missing", name)
+		}
 	}
-	if delegations["description"] != "JSON-encoded delegation array stored in Postgres." {
-		t.Fatalf("delegations description = %#v", delegations["description"])
-	}
-	erc4337, ok := props["is_erc4337"].(map[string]any)
-	if !ok {
-		t.Fatal("WalletScanRow.is_erc4337 must remain")
-	}
-	if erc4337["type"] != "boolean" {
-		t.Fatalf("is_erc4337 type = %#v, want boolean", erc4337["type"])
+	required, _ := chain["required"].([]any)
+	for _, r := range required {
+		if r == "nonce" || r == "key_exposed" {
+			t.Errorf("AddressQualificationChain.%v must be optional", r)
+		}
 	}
 }
 

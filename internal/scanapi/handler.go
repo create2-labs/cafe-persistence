@@ -16,6 +16,7 @@ import (
 	natsconn "cafe-persistence/pkg/nats"
 
 	"github.com/google/uuid"
+	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
 )
 
@@ -354,7 +355,13 @@ func (h *Handler) ListWalletScans(w http.ResponseWriter, r *http.Request) {
 
 	items := make([]map[string]any, 0, len(entities))
 	for _, e := range entities {
-		items = append(items, walletScanRowJSON(e))
+		row, rerr := walletScanRowJSON(e)
+		if rerr != nil {
+			log.Error().Err(rerr).Str("scan_id", e.ID.String()).Msg("wallet scan row cannot be built")
+			writeServiceUnavailable(w, r, "wallet scan store is temporarily unavailable")
+			return
+		}
+		items = append(items, row)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"items":  items,
@@ -387,7 +394,13 @@ func (h *Handler) GetWalletScan(w http.ResponseWriter, r *http.Request) {
 		writeNotFound(w, r, "scan not found")
 		return
 	}
-	writeJSON(w, http.StatusOK, walletScanRowJSON(ent))
+	row, rerr := walletScanRowJSON(ent)
+	if rerr != nil {
+		log.Error().Err(rerr).Str("scan_id", ent.ID.String()).Msg("wallet scan row cannot be built")
+		writeServiceUnavailable(w, r, "wallet scan store is temporarily unavailable")
+		return
+	}
+	writeJSON(w, http.StatusOK, row)
 }
 
 func (h *Handler) DeleteWalletScan(w http.ResponseWriter, r *http.Request) {
@@ -626,30 +639,46 @@ func pendingRecordJSON(rec *repository.PendingV1ScanRecord) map[string]any {
 	return out
 }
 
-func walletScanRowJSON(e *domain.ScanResultEntity) map[string]any {
-	return map[string]any{
-		"id":                  e.ID.String(),
-		"user_id":             e.UserID.String(),
-		"address":             e.Address,
-		"type":                string(e.Type),
-		"algorithm":           string(e.Algorithm),
-		"nist_level":          int(e.NISTLevel),
-		"key_exposed":         e.KeyExposed,
-		"public_key":          e.PublicKey,
-		"transaction_hash":    e.TransactionHash,
-		"exposed_network":     e.ExposedNetwork,
-		"public_key_recovery": string(e.PublicKeyRecovery),
-		"is_eoa":              e.IsEOA,
-		"is_erc4337":          e.IsERC4337,
-		"risk_score":          e.RiskScore,
-		"networks":            e.Networks,
-		"delegations":         e.Delegations,
-		"connections":         e.Connections,
-		"status":              e.Status,
-		"error":               e.Error,
-		"created_at":          e.CreatedAt.UTC().Format(time.RFC3339Nano),
-		"updated_at":          e.UpdatedAt.UTC().Format(time.RFC3339Nano),
+// walletScanRowJSON builds the wallet scan row of design 5.4. A stored qualification
+// column that cannot be decoded is an error.
+func walletScanRowJSON(e *domain.ScanResultEntity) (map[string]any, error) {
+	chains, err := e.DecodeChains()
+	if err != nil {
+		return nil, err
 	}
+	unobserved, err := e.DecodeUnobservedChainIDs()
+	if err != nil {
+		return nil, err
+	}
+	anomalies, err := e.DecodeAnomalies()
+	if err != nil {
+		return nil, err
+	}
+	row := map[string]any{
+		"id":                   e.ID.String(),
+		"user_id":              e.UserID.String(),
+		"address":              e.Address,
+		"account_type":         e.AccountType,
+		"chains":               chains,
+		"unobserved_chain_ids": unobserved,
+		"anomalies":            anomalies,
+		"key_exposed":          e.KeyExposed,
+		"algorithm":            string(e.Algorithm),
+		"nist_level":           int(e.NISTLevel),
+		"risk_score":           e.RiskScore,
+		"public_key":           e.PublicKey,
+		"transaction_hash":     e.TransactionHash,
+		"exposed_network":      e.ExposedNetwork,
+		"public_key_recovery":  string(e.PublicKeyRecovery),
+		"status":               e.Status,
+		"error":                e.Error,
+		"created_at":           e.CreatedAt.UTC().Format(time.RFC3339Nano),
+		"updated_at":           e.UpdatedAt.UTC().Format(time.RFC3339Nano),
+	}
+	if e.ObservedAt != nil {
+		row["observed_at"] = e.ObservedAt.UTC().Format(time.RFC3339Nano)
+	}
+	return row, nil
 }
 
 func tlsScanRowJSON(e *domain.TLSScanResultEntity) map[string]any {
