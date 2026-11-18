@@ -1,11 +1,9 @@
 package scanapi
 
 import (
-	"encoding/json"
 	"strconv"
 	"strings"
 
-	"cafe-persistence/internal/config"
 	"cafe-persistence/internal/domain"
 	"cafe-persistence/pkg/scan"
 )
@@ -14,36 +12,19 @@ func walletEntityIsCompleted(e *domain.ScanResultEntity) bool {
 	return e != nil && strings.ToUpper(strings.TrimSpace(e.Status)) == scan.StateSUCCESS
 }
 
-func walletEntityMatchesChainID(e *domain.ScanResultEntity, want int64, cfg *config.ChainConfig) bool {
-	if e == nil || cfg == nil {
-		return false
+// walletEntityMatchesChainID reports whether an entry of the stored chains has chain_id want,
+// whatever its qualification. An unobserved chain does not match (CA2.2).
+func walletEntityMatchesChainID(e *domain.ScanResultEntity, want int64) (bool, error) {
+	chains, err := e.DecodeChains()
+	if err != nil {
+		return false, err
 	}
-	nets := parseNetworksFromEntity(e.Networks)
-	if len(nets) == 0 {
-		return false
-	}
-	byName := cfg.ChainIDByNetwork()
-	wantStr := strconv.FormatInt(want, 10)
-	for _, n := range nets {
-		if n == wantStr {
-			return true
-		}
-		if cid, ok := byName[n]; ok && cid == want {
-			return true
+	for _, c := range chains {
+		if c.ChainID == want {
+			return true, nil
 		}
 	}
-	return false
-}
-
-func parseNetworksFromEntity(networksJSON string) []string {
-	if networksJSON == "" || networksJSON == "[]" {
-		return nil
-	}
-	var arr []string
-	if err := json.Unmarshal([]byte(networksJSON), &arr); err != nil {
-		return nil
-	}
-	return arr
+	return false, nil
 }
 
 func paginateWalletScanEntities(in []*domain.ScanResultEntity, limit, offset int) []*domain.ScanResultEntity {
