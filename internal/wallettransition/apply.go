@@ -120,6 +120,9 @@ func applyMissing(tx *gorm.DB, ledger repository.ScanUsageLedgerRepository, scan
 		}
 		return applyExisting(tx, ledger, scanID, cmd, &winner)
 	}
+	if err := insertRelated(tx, scanID, relatedOf(cmd)); err != nil {
+		return Result{Status: scan.StatePENDING}, err
+	}
 	if err := finishQuota(tx, ledger, scanID, cmd); err != nil {
 		return Result{Status: scan.StatePENDING}, err
 	}
@@ -160,10 +163,39 @@ func applyExisting(tx *gorm.DB, ledger repository.ScanUsageLedgerRepository, sca
 			return classify(&again, cmd), nil
 		}
 	}
+	if err := insertRelated(tx, scanID, relatedOf(cmd)); err != nil {
+		return Result{Status: status}, err
+	}
 	if err := finishQuota(tx, ledger, scanID, cmd); err != nil {
 		return Result{Status: status}, err
 	}
 	return reload(tx, scanID, OutcomeApplied)
+}
+
+// relatedOf returns the related addresses of a SUCCESS result; other commands carry none.
+func relatedOf(cmd Command) []addressv1.Related {
+	if cmd.Result == nil {
+		return nil
+	}
+	return cmd.Result.RelatedAddresses
+}
+
+// insertRelated stores one scan_related_addresses row per entry, in the transaction of the row write.
+// The rows carry no enrichment and no creation transaction; a row already stored is kept.
+func insertRelated(tx *gorm.DB, scanID uuid.UUID, related []addressv1.Related) error {
+	if len(related) == 0 {
+		return nil
+	}
+	rows := make([]domain.ScanRelatedAddressEntity, len(related))
+	for i, r := range related {
+		rows[i] = domain.ScanRelatedAddressEntity{
+			ScanID: scanID, ChainID: r.ChainID, Role: string(r.Role), Address: r.Address,
+		}
+	}
+	if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&rows).Error; err != nil {
+		return fmt.Errorf("insert related addresses: %w", err)
+	}
+	return nil
 }
 
 func classify(ent *domain.ScanResultEntity, cmd Command) Result {

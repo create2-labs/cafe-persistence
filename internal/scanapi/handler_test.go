@@ -34,6 +34,7 @@ func setupScanAPITestDB(t *testing.T) *gorm.DB {
 		&domain.ScanResultEntity{},
 		&domain.TLSScanResultEntity{},
 		&domain.ScanUsageEventEntity{},
+		&domain.ScanRelatedAddressEntity{},
 	); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
