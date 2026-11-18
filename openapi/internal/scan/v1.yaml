@@ -800,6 +800,32 @@ components:
         updated_at:
           type: string
           format: date-time
+        related_addresses:
+          type: array
+          items:
+            $ref: "#/components/schemas/RelatedAddress"
+          description: |
+            Related addresses of the scan, ordered by chain_id, role, then address; empty when
+            there is none. Present on the by-id route only; the list route omits it.
+
+    RelatedAddress:
+      type: object
+      required: [chain_id, role, address]
+      properties:
+        chain_id:
+          type: integer
+          format: int64
+        role:
+          type: string
+        address:
+          type: string
+        creation_tx_hash:
+          type: string
+          description: Present when non-empty.
+        enrichment_id:
+          type: string
+          format: uuid
+          description: Present when the related address is linked to an enrichment.
 
     AddressQualificationChain:
       type: object

@@ -16,6 +16,7 @@ type ScanResultRepository interface {
 	DeleteOwnedWalletScan(userID, scanID uuid.UUID) (deleted bool, err error)
 	ListOwnerWalletScansDiscoveryV1(userID uuid.UUID, address string, limit, offset int) ([]*domain.ScanResultEntity, int64, error)
 	ListOwnerWalletScansByAddress(userID uuid.UUID, address string) ([]*domain.ScanResultEntity, error)
+	ListRelatedAddresses(scanID uuid.UUID) ([]domain.ScanRelatedAddressEntity, error)
 }
 
 type scanResultRepository struct {
@@ -72,6 +73,17 @@ func (r *scanResultRepository) ListOwnerWalletScansByAddress(userID uuid.UUID, a
 	tx := r.db.Where("user_id = ? AND LOWER(address) = ?", userID, strings.ToLower(strings.TrimSpace(address)))
 	var out []*domain.ScanResultEntity
 	if err := tx.Order("created_at DESC, id DESC").Find(&out).Error; err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ListRelatedAddresses returns the related addresses of a wallet scan, ordered by chain_id, role, then address.
+// GORM's default scope excludes soft-deleted rows.
+func (r *scanResultRepository) ListRelatedAddresses(scanID uuid.UUID) ([]domain.ScanRelatedAddressEntity, error) {
+	var out []domain.ScanRelatedAddressEntity
+	err := r.db.Where("scan_id = ?", scanID).Order("chain_id ASC, role ASC, address ASC").Find(&out).Error
+	if err != nil {
 		return nil, err
 	}
 	return out, nil

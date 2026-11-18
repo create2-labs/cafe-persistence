@@ -149,6 +149,32 @@ func TestScanV1OpenAPI_AddressQualificationChain(t *testing.T) {
 	}
 }
 
+// CA1.3: RelatedAddress is a schema and WalletScanRow documents related_addresses (by-id route only).
+func TestScanV1OpenAPI_RelatedAddress(t *testing.T) {
+	spec := loadScanV1OpenAPISpec(t)
+	schemas := spec["components"].(map[string]any)["schemas"].(map[string]any)
+	related, ok := schemas["RelatedAddress"].(map[string]any)
+	if !ok {
+		t.Fatal("RelatedAddress schema missing")
+	}
+	props, _ := related["properties"].(map[string]any)
+	for _, name := range []string{"chain_id", "role", "address", "creation_tx_hash", "enrichment_id"} {
+		if _, ok := props[name]; !ok {
+			t.Errorf("RelatedAddress.%s missing", name)
+		}
+	}
+	required, _ := related["required"].([]any)
+	for _, r := range required {
+		if r == "creation_tx_hash" || r == "enrichment_id" {
+			t.Errorf("RelatedAddress.%v must be optional", r)
+		}
+	}
+	rowProps := schemas["WalletScanRow"].(map[string]any)["properties"].(map[string]any)
+	if _, ok := rowProps["related_addresses"]; !ok {
+		t.Error("WalletScanRow.related_addresses missing")
+	}
+}
+
 func TestScanV1OpenAPI_WalletScanRowPublicKeyRecovery(t *testing.T) {
 	spec := loadScanV1OpenAPISpec(t)
 	components := spec["components"].(map[string]any)
