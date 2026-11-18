@@ -1,5 +1,36 @@
 # Changelog
 
+## [3.0.0](https://github.com/create2-labs/cafe-persistence/compare/v2.2.0...v3.0.0) (2026-11-18)
+
+
+### ⚠ BREAKING CHANGES
+
+* **scan:** return the qualification columns in the wallet scan row
+* **scan:** the internal wallet transition route accepts only an observation/address/v1 result for a SUCCESS; a result in the former shape is rejected.
+* **scan:** store the address qualification and related addresses
+
+### Features
+
+* **scan:** filter wallet scans by their observed chains ([a01b07b](https://github.com/create2-labs/cafe-persistence/commit/a01b07b6c6b9ae584d73b424e91c91c697187b36))
+* **scan:** filter wallet scans by their observed chains ([ff2e76c](https://github.com/create2-labs/cafe-persistence/commit/ff2e76c0849de27cd80a9f720f3e4c07a8479fd0))
+* **scan:** return related addresses in the wallet scan by id ([34ca879](https://github.com/create2-labs/cafe-persistence/commit/34ca8795c26b51be1c5c9019cffc144046699747))
+* **scan:** return related addresses in the wallet scan by id ([cfc563a](https://github.com/create2-labs/cafe-persistence/commit/cfc563aaf53d32274582c10ece992db6362a658b))
+* **scan:** return the qualification columns in the wallet scan row ([03e2aa8](https://github.com/create2-labs/cafe-persistence/commit/03e2aa8b56a985c8afe5699b4441839b8f64941b))
+* **scan:** store the address qualification and related addresses ([34d2e4a](https://github.com/create2-labs/cafe-persistence/commit/34d2e4ad766849cedc438a9b79c5446822e6778a))
+* **scan:** store the delegation targets of a wallet transition ([23f9920](https://github.com/create2-labs/cafe-persistence/commit/23f992003ad85348c3c82c4e6bf0e4eb6aa7f544))
+* **scan:** store the delegation targets of a wallet transition ([32f7f32](https://github.com/create2-labs/cafe-persistence/commit/32f7f327890bceef11f2f523e5b4770edfb7e015))
+* **scan:** write the qualification in the wallet transition ([4908350](https://github.com/create2-labs/cafe-persistence/commit/4908350623fee2aff988e39288f6f022c109b4a0))
+
+
+### Bug Fixes
+
+* **config:** remove the development database credential ([2797dfc](https://github.com/create2-labs/cafe-persistence/commit/2797dfcd660fef36e7bbb355a63c88bc91ba9d6d))
+* **config:** remove the development database credential from the tracked configuration ([a54ac46](https://github.com/create2-labs/cafe-persistence/commit/a54ac46bed2c355f1acec454863a0810013b2e59))
+* govulncheck version ([963d756](https://github.com/create2-labs/cafe-persistence/commit/963d756730e843a678cf46701673380d37aae9f1))
+* **postgres:** refuse an unset database credential ([5846048](https://github.com/create2-labs/cafe-persistence/commit/58460484d1465a55cc62e74ca7916af08d2ae244))
+* **postgres:** refuse an unset database credential and pass the settings exactly ([fefb17d](https://github.com/create2-labs/cafe-persistence/commit/fefb17d2fc142dc2deb3ee4e5fa8ef1588a8b84e))
+* upgrade to go 1.27.4 to solve GO-2026-6859 ([b5f9dc3](https://github.com/create2-labs/cafe-persistence/commit/b5f9dc3c130fcebe4df4d6b9572fc22a2b6664a5))
+
 ## [2.2.0](https://github.com/create2-labs/cafe-persistence/compare/v2.1.0...v2.2.0) (2026-11-02)
 
 
