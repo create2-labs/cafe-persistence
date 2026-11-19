@@ -533,6 +533,20 @@ func TestApplyWalletTransition_ProjectsTerminalSuccess(t *testing.T) {
 	if bus.count(cafenatsv01.NATSSubjectDiscoveryWalletObservedV01) != 1 || observedEventID(t, bus.body(cafenatsv01.NATSSubjectDiscoveryWalletObservedV01, 0)) != wantID {
 		t.Fatal("wallet.observed")
 	}
+	// OC-P24a: the event is built from the stored row: eoa, and the chain ids of chains (not of unobserved ones).
+	var observed struct {
+		Payload struct {
+			AccountKind  string  `json:"account_kind"`
+			ChainIDs     []int64 `json:"chain_ids"`
+			IsMultichain bool    `json:"is_multichain"`
+		} `json:"payload"`
+	}
+	if err := json.Unmarshal(bus.body(cafenatsv01.NATSSubjectDiscoveryWalletObservedV01, 0), &observed); err != nil {
+		t.Fatal(err)
+	}
+	if observed.Payload.AccountKind != "eoa" || !reflect.DeepEqual(observed.Payload.ChainIDs, []int64{1, 10}) || !observed.Payload.IsMultichain {
+		t.Fatalf("wallet.observed payload %+v", observed.Payload)
+	}
 
 	code, got = postTransition(t, url, user, successBody("t-ok", user, transitionAddr))
 	assertProjected(t, code, got, "already_applied", scan.StateSUCCESS, true, true)

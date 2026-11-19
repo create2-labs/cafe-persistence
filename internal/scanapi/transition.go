@@ -138,17 +138,12 @@ func (h *Handler) publishWalletObserved(row *domain.ScanResultEntity) {
 	if h.events == nil {
 		return
 	}
-	var chains map[string]int64
-	if h.chainCfg != nil {
-		chains = h.chainCfg.ChainIDByNetwork()
+	ev, err := walletobservation.ToWalletObservedEvent(walletobservation.ExportMetaForScanJob(row.ID), row)
+	if err != nil {
+		log.Error().Err(err).Str("scan_id", row.ID.String()).Msg("wallet transition wallet.observed mapping failed")
+		return
 	}
-	result := row.ToScanResult()
-	ev := walletobservation.ToWalletObservedEvent(walletobservation.ExportMetaForScanJob(row.ID), result, chains)
 	if err := ev.Validate(); err != nil {
-		if result != nil && result.Algorithm == "" {
-			log.Info().Str("scan_id", row.ID.String()).Msg("wallet transition wallet.observed skipped (empty algorithm)")
-			return
-		}
 		log.Error().Err(err).Str("scan_id", row.ID.String()).Msg("wallet transition wallet.observed export validation failed")
 		return
 	}
