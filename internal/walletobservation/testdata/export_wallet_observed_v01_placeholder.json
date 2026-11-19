@@ -16,7 +16,7 @@
     ],
     "account_kind": "eoa",
     "current_algorithm": "secp256k1_ecrecover",
-    "current_pq_posture": "unknown",
+    "current_pq_posture": "classical_only",
     "public_key_exposed": false,
     "is_multichain": false,
     "observed_at": "2026-04-17T09:59:58Z"
