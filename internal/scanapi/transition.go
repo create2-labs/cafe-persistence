@@ -138,6 +138,10 @@ func (h *Handler) publishWalletObserved(row *domain.ScanResultEntity) {
 	if h.events == nil {
 		return
 	}
+	if row.AccountType != "eoa" {
+		log.Debug().Str("scan_id", row.ID.String()).Str("account_type", row.AccountType).Msg("wallet transition wallet.observed skipped: not an eoa")
+		return
+	}
 	ev, err := walletobservation.ToWalletObservedEvent(walletobservation.ExportMetaForScanJob(row.ID), row)
 	if err != nil {
 		log.Error().Err(err).Str("scan_id", row.ID.String()).Msg("wallet transition wallet.observed mapping failed")

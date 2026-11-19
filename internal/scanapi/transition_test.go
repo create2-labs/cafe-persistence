@@ -27,6 +27,8 @@ import (
 	"github.com/google/uuid"
 	natslib "github.com/nats-io/nats.go"
 	goredis "github.com/redis/go-redis/v9"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
 )
 
@@ -1058,4 +1060,109 @@ func TestApplyWalletTransition_StoresDelegationTargets(t *testing.T) {
 			t.Fatalf("related rows %+v, want the chain 10 delegation target", rows)
 		}
 	})
+}
+
+// captureLog swaps the zerolog global logger for a JSON buffer at Debug level, restored on cleanup.
+// Tests that use it must not run in parallel.
+func captureLog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	buf := &bytes.Buffer{}
+	prevLogger, prevLevel := log.Logger, zerolog.GlobalLevel()
+	log.Logger = zerolog.New(buf).Level(zerolog.DebugLevel)
+	zerolog.SetGlobalLevel(zerolog.DebugLevel)
+	t.Cleanup(func() {
+		log.Logger = prevLogger
+		zerolog.SetGlobalLevel(prevLevel)
+	})
+	return buf
+}
+
+// logLevels counts the captured lines that mention wallet.observed, per level.
+func logLevels(t *testing.T, buf *bytes.Buffer) map[string]int {
+	t.Helper()
+	out := map[string]int{}
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		if line == "" || !strings.Contains(line, "wallet.observed") {
+			continue
+		}
+		var l struct {
+			Level string `json:"level"`
+		}
+		if err := json.Unmarshal([]byte(line), &l); err != nil {
+			t.Fatalf("log line %q: %v", line, err)
+		}
+		out[l.Level]++
+	}
+	return out
+}
+
+func TestApplyWalletTransition_ObservedOnlyForEOA(t *testing.T) {
+	blank := addressv1.Result{
+		Address: transitionAddr, AccountType: addressv1.AccountTypeBlank, ObservedAt: observedAtUTC,
+		Chains: []addressv1.Chain{{ChainID: 1, Qualification: addressv1.QualificationBlank, Nonce: u64(0)}},
+	}
+	contract := addressv1.Result{
+		Address: transitionAddr, AccountType: addressv1.AccountTypeContract, ObservedAt: observedAtUTC,
+		Chains: []addressv1.Chain{{ChainID: 1, Qualification: addressv1.QualificationContract}},
+	}
+
+	// CA1.4: only an eoa publishes wallet.observed; a contract or a blank address is not an error.
+	for _, tc := range []struct {
+		name   string
+		result addressv1.Result
+		eoa    bool
+	}{
+		{"eoa publishes", eoaResult(transitionAddr), true},
+		{"contract does not publish", contract, false},
+		{"blank does not publish", blank, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			buf := captureLog(t)
+			cache := &transitionRedis{values: map[string]string{}}
+			bus := &transitionBus{}
+			ts, db := startProjectedAPI(t, cache, bus)
+			defer ts.Close()
+			user := uuid.New()
+			scanID, outcome := postSuccess(t, db, ts, user, "oe-"+tc.name, resultWire(t, tc.result))
+			if outcome != "applied" {
+				t.Fatalf("outcome %q", outcome)
+			}
+			// scan.ready is published in every case.
+			if bus.count(lifecycle.SubjectScanReady) != 1 {
+				t.Fatalf("scan.ready count %d", bus.count(lifecycle.SubjectScanReady))
+			}
+			subject := cafenatsv01.NATSSubjectDiscoveryWalletObservedV01
+			levels := logLevels(t, buf)
+			if tc.eoa {
+				if bus.count(subject) != 1 {
+					t.Fatalf("wallet.observed count %d, want 1", bus.count(subject))
+				}
+				var ev struct {
+					EventID string `json:"event_id"`
+					Payload struct {
+						AccountKind string  `json:"account_kind"`
+						ChainIDs    []int64 `json:"chain_ids"`
+					} `json:"payload"`
+				}
+				if err := json.Unmarshal(bus.body(subject, 0), &ev); err != nil {
+					t.Fatal(err)
+				}
+				if ev.EventID != walletobservation.ExportMetaForScanJob(scanID).EventID ||
+					ev.Payload.AccountKind != "eoa" || !reflect.DeepEqual(ev.Payload.ChainIDs, []int64{1, 10}) {
+					t.Fatalf("wallet.observed %s", bus.body(subject, 0))
+				}
+				if levels["error"] != 0 {
+					t.Fatalf("eoa logged at error: %v", levels)
+				}
+				return
+			}
+			if bus.count(subject) != 0 {
+				t.Fatalf("wallet.observed count %d, want 0", bus.count(subject))
+			}
+			// Design 5.5: the skip is a Debug log, never an Error.
+			if levels["error"] != 0 || levels["debug"] != 1 {
+				t.Fatalf("wallet.observed log levels %v, want one debug and no error", levels)
+			}
+		})
+	}
 }
