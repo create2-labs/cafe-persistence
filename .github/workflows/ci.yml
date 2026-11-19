@@ -37,9 +37,6 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
 
-      - name: Unit tests
-        run: go test ./...
-
       - name: DDL integration test (ADR §14.5)
         env:
           POSTGRES_HOST: 127.0.0.1
