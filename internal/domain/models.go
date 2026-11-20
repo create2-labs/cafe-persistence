@@ -12,13 +12,6 @@ const (
 	AccountTypeUnknown  AccountType = "unknown"
 )
 
-// Delegation is one EIP-7702 designator observed on a chain.
-// DelegatedAddress is the delegation target; this scan does not qualify what that address is.
-type Delegation struct {
-	ChainID          int64  `json:"chain_id"`
-	DelegatedAddress string `json:"delegated_address"`
-}
-
 // Algorithm represents the cryptographic algorithm used
 type Algorithm string
 
@@ -54,37 +47,6 @@ const (
 	PublicKeyRecoveryRecovered   PublicKeyRecovery = "recovered"
 	PublicKeyRecoveryUnresolved  PublicKeyRecovery = "unresolved"
 )
-
-// ScanResult represents the result of a wallet discovery scan
-type ScanResult struct {
-	Address           string            `json:"address"`
-	Type              AccountType       `json:"type"`
-	Algorithm         Algorithm         `json:"algorithm"`
-	NISTLevel         NISTLevel         `json:"nist_level"`
-	KeyExposed        bool              `json:"key_exposed"`
-	PublicKey         string            `json:"public_key,omitempty"`       // Recovered public key if available
-	TransactionHash   string            `json:"transaction_hash,omitempty"` // Hash of transaction that exposed the key
-	ExposedNetwork    string            `json:"exposed_network,omitempty"`  // Network where key was exposed
-	IsEOA             bool              `json:"is_eoa"`
-	IsERC4337         bool              `json:"is_erc4337"`
-	RiskScore         float64           `json:"risk_score"`
-	PublicKeyRecovery PublicKeyRecovery `json:"public_key_recovery"`
-	ScannedAt         time.Time         `json:"scanned_at"`
-	Networks          []string          `json:"networks"`
-	Delegations       []Delegation      `json:"delegations"`
-	Connections       []string          `json:"connections"`
-}
-
-// NetworkResult represents the scan result for a specific network
-type NetworkResult struct {
-	Network          string
-	IsEOA            bool
-	IsERC4337        bool // True if contract implements ERC-4337 (Account Abstraction)
-	IsKeyExposed     bool
-	TransactionCount uint64
-	PublicKey        string // Recovered public key if available
-	TransactionHash  string // Hash of transaction that exposed the key (if available)
-}
 
 // TLSScanResult represents the result of a TLS certificate scan
 type TLSScanResult struct {

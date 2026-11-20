@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"testing"
 
-	"cafe-persistence/internal/domain"
-
 	lifecycle "github.com/create2-labs/cafe-contracts/discovery/scanlifecycle/v1"
 	"github.com/google/uuid"
 )
@@ -27,11 +25,14 @@ func TestContractCompletedBecomesStorageView(t *testing.T) {
 	if view.ScanID != scanID || view.UserID != userID || view.Address != "0xabc" {
 		t.Fatalf("view = %+v", view)
 	}
-	var result domain.ScanResult
+	var result struct {
+		Address string `json:"address"`
+		Type    string `json:"type"`
+	}
 	if err := (&ScanEventHandler{}).decodeResult(view.Result, &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.Address != "0xabc" || result.Type != domain.AccountTypeEOA {
+	if result.Address != "0xabc" || result.Type != "EOA" {
 		t.Fatalf("result = %+v", result)
 	}
 }

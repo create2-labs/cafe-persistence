@@ -260,12 +260,8 @@ func seedUsage(t *testing.T, db *gorm.DB, userID, scanID uuid.UUID, kind domain.
 	}
 }
 
-func walletResult(address string, accountType domain.AccountType) *domain.ScanResult {
-	return &domain.ScanResult{
-		Address: address, Type: accountType,
-		Algorithm: domain.AlgorithmECDSAsecp256k1, NISTLevel: domain.NISTLevel1,
-		RiskScore: 1, Networks: []string{"ethereum"},
-	}
+func walletResult(address string, accountType domain.AccountType) map[string]any {
+	return map[string]any{"address": address, "type": string(accountType)}
 }
 
 func tlsResult(url string) *domain.TLSScanResult {
