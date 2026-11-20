@@ -795,10 +795,6 @@ func TestApplyWalletTransition_StoresQualification(t *testing.T) {
 		if !row.KeyExposed || string(row.Algorithm) != "ECDSA-secp256k1" || int(row.NISTLevel) != 1 || row.RiskScore != 0.4 {
 			t.Fatalf("eoa columns %+v", row)
 		}
-		// The replaced columns are not set (design §5.3 Row).
-		if row.Type != "" || row.IsEOA || row.IsERC4337 || row.Networks != "" || row.Delegations != "" || row.Connections != "" {
-			t.Fatalf("replaced columns set %+v", row)
-		}
 		// CA1.3: the designator chain stores its delegation_target row (OC-P22b).
 		rows := relatedRows(t, db, scanID)
 		if len(rows) != 1 || rows[0].ChainID != 1 || rows[0].Address != "0x2222222222222222222222222222222222222222" {

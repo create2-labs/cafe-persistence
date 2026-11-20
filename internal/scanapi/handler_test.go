@@ -439,7 +439,7 @@ func TestScanAPI_DeleteWalletScan_OK(t *testing.T) {
 	scanID := uuid.New()
 	row := domain.ScanResultEntity{
 		ID: scanID, UserID: userID, Address: "0xabc", Status: scan.StateSUCCESS,
-		Type: domain.AccountTypeEOA, Algorithm: domain.AlgorithmECDSAsecp256k1, NISTLevel: domain.NISTLevel1,
+		Algorithm: domain.AlgorithmECDSAsecp256k1, NISTLevel: domain.NISTLevel1,
 	}
 	if err := db.Create(&row).Error; err != nil {
 		t.Fatalf("seed: %v", err)
@@ -467,7 +467,7 @@ func TestScanAPI_GetScanLedgerUsage_OK(t *testing.T) {
 	}
 	if err := db.Create(&domain.ScanResultEntity{
 		ID: uuid.New(), UserID: userID, Address: "0x1", Status: scan.StateRUNNING,
-		Type: domain.AccountTypeEOA, Algorithm: domain.AlgorithmECDSAsecp256k1, NISTLevel: domain.NISTLevel1,
+		Algorithm: domain.AlgorithmECDSAsecp256k1, NISTLevel: domain.NISTLevel1,
 	}).Error; err != nil {
 		t.Fatalf("seed in-flight: %v", err)
 	}

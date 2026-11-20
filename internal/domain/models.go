@@ -2,16 +2,6 @@ package domain
 
 import "time"
 
-// AccountType represents the type of Ethereum account
-type AccountType string
-
-const (
-	AccountTypeEOA      AccountType = "EOA"
-	AccountTypeAA       AccountType = "AA" // Abstract Account (ERC-4337)
-	AccountTypeContract AccountType = "Contract"
-	AccountTypeUnknown  AccountType = "unknown"
-)
-
 // Algorithm represents the cryptographic algorithm used
 type Algorithm string
 

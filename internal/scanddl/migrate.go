@@ -20,8 +20,9 @@ var scanIndexDDL = []string{
 	`ALTER TABLE tls_scan_results ALTER COLUMN status DROP DEFAULT`,
 }
 
-// walletResultDDL removes activity dates from scan_results and constrains
-// public_key_recovery. Previous first_seen/last_seen values are not translated.
+// walletResultDDL removes activity dates and the replaced columns from
+// scan_results and constrains public_key_recovery and account_type.
+// Previous first_seen/last_seen values are not translated.
 var walletResultDDL = []string{
 	`ALTER TABLE scan_results DROP COLUMN IF EXISTS first_seen`,
 	`ALTER TABLE scan_results DROP COLUMN IF EXISTS last_seen`,
@@ -29,6 +30,13 @@ var walletResultDDL = []string{
 	`ALTER TABLE scan_results ADD CONSTRAINT chk_scan_results_public_key_recovery CHECK (public_key_recovery IN ('', 'not_required', 'recovered', 'unresolved'))`,
 	`ALTER TABLE scan_results DROP CONSTRAINT IF EXISTS chk_scan_results_account_type`,
 	`ALTER TABLE scan_results ADD CONSTRAINT chk_scan_results_account_type CHECK (account_type IN ('', 'eoa', 'contract', 'blank'))`,
+	// The replaced columns (design §5.6): the qualification columns carry their meaning.
+	`ALTER TABLE scan_results DROP COLUMN IF EXISTS type`,
+	`ALTER TABLE scan_results DROP COLUMN IF EXISTS is_eoa`,
+	`ALTER TABLE scan_results DROP COLUMN IF EXISTS is_erc4337`,
+	`ALTER TABLE scan_results DROP COLUMN IF EXISTS networks`,
+	`ALTER TABLE scan_results DROP COLUMN IF EXISTS delegations`,
+	`ALTER TABLE scan_results DROP COLUMN IF EXISTS connections`,
 }
 
 // relatedAddressDDL holds the constraints of scan_related_addresses (design §5.2).

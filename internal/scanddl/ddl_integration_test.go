@@ -62,6 +62,7 @@ func TestMigrateScanSchema_matchesGoldenIndexes(t *testing.T) {
 	assertWalletTransitionID(t, db)
 	assertQualificationColumns(t, db)
 	assertAccountTypeConstraint(t, db)
+	assertReplacedColumnsDropped(t, db)
 	assertRelatedAddressTable(t, db)
 	assertRelatedAddressConstraints(t, db)
 }
@@ -231,13 +232,23 @@ func wantRefused(t *testing.T, err error, constraint, what string) {
 func assertAccountTypeConstraint(t *testing.T, db *gorm.DB) {
 	t.Helper()
 	const insert = `
-INSERT INTO scan_results (id, user_id, address, type, algorithm, nist_level, key_exposed, is_eoa, is_erc4337, risk_score, account_type)
-VALUES ('00000000-0000-0000-0000-0000000000a1', '00000000-0000-0000-0000-0000000000b1', '0xaaaa', 'unknown', '', 0, false, false, false, 0, ?)`
+INSERT INTO scan_results (id, user_id, address, algorithm, nist_level, key_exposed, risk_score, account_type)
+VALUES ('00000000-0000-0000-0000-0000000000a1', '00000000-0000-0000-0000-0000000000b1', '0xaaaa', '', 0, false, 0, ?)`
 	for _, ok := range []string{"", "eoa", "contract", "blank"} {
 		wantAccepted(t, probe(t, db, insert, ok), "account_type "+ok)
 	}
 	for _, bad := range []string{"unknown", "EOA", "not_deployed"} {
 		wantRefused(t, probe(t, db, insert, bad), "chk_scan_results_account_type", "account_type "+bad)
+	}
+}
+
+// OC-P72b (design 5.6): the six replaced columns are absent from scan_results.
+func assertReplacedColumnsDropped(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	for _, column := range []string{"type", "is_eoa", "is_erc4337", "networks", "delegations", "connections"} {
+		if _, ok := readColumn(t, db, "scan_results", column); ok {
+			t.Fatalf("scan_results.%s must be dropped", column)
+		}
 	}
 }
 
