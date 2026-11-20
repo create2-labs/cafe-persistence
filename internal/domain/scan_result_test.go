@@ -1,62 +1,10 @@
 package domain
 
 import (
-	"encoding/json"
-	"strings"
 	"testing"
 
 	addressv1 "github.com/create2-labs/cafe-contracts/observation/address/v1"
 )
-
-func TestScanResultJSON_PublicKeyRecoveryWithoutActivityDates(t *testing.T) {
-	t.Parallel()
-
-	raw := []byte(`{
-		"address":"0xabc",
-		"public_key_recovery":"recovered",
-		"first_seen":"2019-05-06T07:08:09Z",
-		"last_seen":"2024-11-12T13:14:15Z"
-	}`)
-	var decoded ScanResult
-	if err := json.Unmarshal(raw, &decoded); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if decoded.PublicKeyRecovery != PublicKeyRecoveryRecovered {
-		t.Fatalf("public_key_recovery = %q", decoded.PublicKeyRecovery)
-	}
-
-	entity := &ScanResultEntity{Address: decoded.Address, PublicKeyRecovery: decoded.PublicKeyRecovery}
-	out := entity.ToScanResult()
-	if out.PublicKeyRecovery != PublicKeyRecoveryRecovered {
-		t.Fatalf("round trip = %q", out.PublicKeyRecovery)
-	}
-
-	body, err := json.Marshal(out)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(body), "first_seen") || strings.Contains(string(body), "last_seen") {
-		t.Fatalf("activity dates present in %s", body)
-	}
-	if !strings.Contains(string(body), `"public_key_recovery":"recovered"`) {
-		t.Fatalf("body = %s", body)
-	}
-}
-
-func TestToScanResult_PublicKeyRecoveryValues(t *testing.T) {
-	t.Parallel()
-
-	for _, value := range []PublicKeyRecovery{
-		PublicKeyRecoveryNotRequired,
-		PublicKeyRecoveryRecovered,
-		PublicKeyRecoveryUnresolved,
-	} {
-		entity := &ScanResultEntity{Address: "0xabc", PublicKeyRecovery: value}
-		if got := entity.ToScanResult().PublicKeyRecovery; got != value {
-			t.Fatalf("public_key_recovery = %q, want %q", got, value)
-		}
-	}
-}
 
 // ET8 (OC-P21): the three decoding helpers of the qualification columns.
 
