@@ -1,5 +1,19 @@
 # Changelog
 
+## [3.1.0](https://github.com/create2-labs/cafe-persistence/compare/v3.0.0...v3.1.0) (2026-11-21)
+
+
+### Features
+
+* **scan:** build wallet.observed from the stored qualification ([c73852f](https://github.com/create2-labs/cafe-persistence/commit/c73852f194f5d9f79c6ffa880b89d6b6d55158ee))
+* **scan:** publish wallet.observed only for an eoa ([85a8731](https://github.com/create2-labs/cafe-persistence/commit/85a87312c415f8a74ef90f23f7defc260d901192))
+* **scan:** publish wallet.observed only for an eoa ([e9b587d](https://github.com/create2-labs/cafe-persistence/commit/e9b587ddd1069bcacf9eb37724c57cc98d0d6b5e))
+
+
+### Bug Fixes
+
+* go test is already run in CI image ([827ceae](https://github.com/create2-labs/cafe-persistence/commit/827ceae740abb2db12060ad3b09dd8afe1a1084a))
+
 ## [3.0.0](https://github.com/create2-labs/cafe-persistence/compare/v2.2.0...v3.0.0) (2026-11-18)
 
 
