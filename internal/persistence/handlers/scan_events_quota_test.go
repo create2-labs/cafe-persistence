@@ -89,7 +89,7 @@ func TestApplyCompleted_WalletDoesNotWriteScanOrLedger(t *testing.T) {
 	for _, scanID := range []uuid.UUID{missingID, runningID} {
 		if err := handler.applyCompleted(&scanCompleted{
 			ScanID: scanID, Kind: "wallet", UserID: userID, Address: address,
-			Result: walletResult(address, domain.AccountTypeEOA),
+			Result: walletResult(address),
 		}); err != nil {
 			t.Fatalf("applyCompleted %s: %v", scanID, err)
 		}
@@ -106,7 +106,7 @@ func TestApplyCompleted_WalletDoesNotWriteScanOrLedger(t *testing.T) {
 	if err := db.Where("id = ?", runningID).First(&row).Error; err != nil {
 		t.Fatalf("load seeded scan: %v", err)
 	}
-	if row.Status != scan.StateRUNNING || row.Type != "" || row.Error != "" || row.PublicKey != "" {
+	if row.Status != scan.StateRUNNING || row.AccountType != "" || row.Error != "" || row.PublicKey != "" {
 		t.Fatalf("seeded RUNNING row changed: %+v", row)
 	}
 	assertUsageCount(t, db, userID, domain.ScanUsageKindWallet, 1)
@@ -164,7 +164,7 @@ func TestHandleWalletFailed_AfterSuccessKeepsUsage(t *testing.T) {
 	address := "0xdone"
 	seedUsage(t, db, userID, scanID, domain.ScanUsageKindWallet)
 	entity := &domain.ScanResultEntity{
-		ID: scanID, UserID: userID, Address: address, Type: domain.AccountTypeEOA,
+		ID: scanID, UserID: userID, Address: address,
 		Algorithm: domain.AlgorithmECDSAsecp256k1, NISTLevel: domain.NISTLevel1, RiskScore: 1,
 	}
 	entity.Status = scan.StateSUCCESS
@@ -260,8 +260,8 @@ func seedUsage(t *testing.T, db *gorm.DB, userID, scanID uuid.UUID, kind domain.
 	}
 }
 
-func walletResult(address string, accountType domain.AccountType) map[string]any {
-	return map[string]any{"address": address, "type": string(accountType)}
+func walletResult(address string) map[string]any {
+	return map[string]any{"address": address}
 }
 
 func tlsResult(url string) *domain.TLSScanResult {

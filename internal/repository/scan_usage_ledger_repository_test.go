@@ -59,9 +59,9 @@ func TestScanUsageLedger_CountInFlightScans(t *testing.T) {
 	userID := uuid.New()
 
 	rows := []domain.ScanResultEntity{
-		{ID: uuid.New(), UserID: userID, Address: "0x1", Status: scan.StateRUNNING, Type: domain.AccountTypeEOA, Algorithm: domain.AlgorithmECDSAsecp256k1, NISTLevel: domain.NISTLevel1},
-		{ID: uuid.New(), UserID: userID, Address: "0x2", Status: scan.StateSUCCESS, Type: domain.AccountTypeEOA, Algorithm: domain.AlgorithmECDSAsecp256k1, NISTLevel: domain.NISTLevel1},
-		{ID: uuid.New(), UserID: userID, Address: "0x3", Status: scan.StateFAILED, Type: domain.AccountTypeEOA, Algorithm: domain.AlgorithmECDSAsecp256k1, NISTLevel: domain.NISTLevel1},
+		{ID: uuid.New(), UserID: userID, Address: "0x1", Status: scan.StateRUNNING, Algorithm: domain.AlgorithmECDSAsecp256k1, NISTLevel: domain.NISTLevel1},
+		{ID: uuid.New(), UserID: userID, Address: "0x2", Status: scan.StateSUCCESS, Algorithm: domain.AlgorithmECDSAsecp256k1, NISTLevel: domain.NISTLevel1},
+		{ID: uuid.New(), UserID: userID, Address: "0x3", Status: scan.StateFAILED, Algorithm: domain.AlgorithmECDSAsecp256k1, NISTLevel: domain.NISTLevel1},
 	}
 	if err := db.Create(&rows).Error; err != nil {
 		t.Fatalf("seed: %v", err)
@@ -116,7 +116,7 @@ func TestScanUsageLedger_CountVisibleSuccessScans_ExcludesSoftDeleted(t *testing
 
 	row := domain.ScanResultEntity{
 		ID: scanID, UserID: userID, Address: "0xdel", Status: scan.StateSUCCESS,
-		Type: domain.AccountTypeEOA, Algorithm: domain.AlgorithmECDSAsecp256k1, NISTLevel: domain.NISTLevel1,
+		Algorithm: domain.AlgorithmECDSAsecp256k1, NISTLevel: domain.NISTLevel1,
 	}
 	if err := db.Create(&row).Error; err != nil {
 		t.Fatalf("seed: %v", err)

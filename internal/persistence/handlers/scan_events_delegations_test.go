@@ -118,7 +118,7 @@ func assertCompletedPayloadNotStored(t *testing.T, db *gorm.DB, scanID uuid.UUID
 	if err := db.Where("id = ?", scanID).First(&stored).Error; err != nil {
 		t.Fatalf("load row: %v", err)
 	}
-	if stored.Status != scan.StateRUNNING || stored.Type != "" || stored.Delegations != "" || stored.Algorithm != "" || stored.IsERC4337 {
+	if stored.Status != scan.StateRUNNING || stored.Algorithm != "" {
 		t.Fatalf("completed payload stored: %+v", stored)
 	}
 	assertNoWalletProjection(t, cache, bus)
