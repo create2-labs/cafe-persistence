@@ -65,6 +65,7 @@ func TestMigrateScanSchema_matchesGoldenIndexes(t *testing.T) {
 	assertReplacedColumnsDropped(t, db)
 	assertRelatedAddressTable(t, db)
 	assertRelatedAddressConstraints(t, db)
+	assertScanEnrichments(t, db)
 }
 
 func assertWalletTransitionID(t *testing.T, db *gorm.DB) {
@@ -313,6 +314,65 @@ VALUES ('00000000-0000-0000-0000-0000000000a2', 1, ?, '0xbbbb', ?)`
 	}
 	wantRefused(t, probe(t, db, insert, "delegation_target", enrichmentID), enrichment, "delegation_target with enrichment_id")
 	wantRefused(t, probe(t, db, insert, "deployer", nil), enrichment, "deployer without enrichment_id")
+}
+
+// ET8 (OC-P41): the scan_enrichments table, its columns, constraints, and unique (scan_id, family).
+func assertScanEnrichments(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	const table = "scan_enrichments"
+	if !slices.Contains(ScanTableNames, table) {
+		t.Fatalf("ScanTableNames must contain %s, got %v", table, ScanTableNames)
+	}
+	wantColumn(t, db, table, "enrichment_id", "character", 36, false, "")
+	wantColumn(t, db, table, "scan_id", "character", 36, false, "")
+	wantColumn(t, db, table, "family", "character varying", 20, false, "")
+	wantColumn(t, db, table, "user_id", "character", 36, false, "")
+	wantColumn(t, db, table, "status", "character varying", 20, false, "")
+	wantColumn(t, db, table, "chains", "text", 0, false, "")
+	wantColumn(t, db, table, "error", "text", 0, false, "''")
+	wantColumn(t, db, table, "transition_id", "text", 0, false, "")
+	wantColumn(t, db, table, "created_at", "timestamp with time zone", 0, true, "")
+	wantColumn(t, db, table, "updated_at", "timestamp with time zone", 0, true, "")
+	wantColumn(t, db, table, "deleted_at", "timestamp with time zone", 0, true, "")
+
+	var fks int64
+	if err := db.Raw(`SELECT COUNT(*) FROM pg_constraint WHERE conrelid = 'scan_enrichments'::regclass AND contype = 'f'`).Scan(&fks).Error; err != nil {
+		t.Fatalf("count foreign keys: %v", err)
+	}
+	if fks != 0 {
+		t.Fatalf("scan_enrichments must have no foreign key, got %d", fks)
+	}
+
+	const insert = `
+INSERT INTO scan_enrichments (enrichment_id, scan_id, family, user_id, status, chains, transition_id)
+VALUES (?, '00000000-0000-0000-0000-0000000000a3', ?, '00000000-0000-0000-0000-0000000000b3', ?, '[]', ?)`
+	const id1 = "00000000-0000-0000-0000-0000000000d1"
+	const id2 = "00000000-0000-0000-0000-0000000000d2"
+	for _, ok := range []string{"history", "deployer"} {
+		wantAccepted(t, probe(t, db, insert, id1, ok, "PENDING", "t1"), "family "+ok)
+	}
+	for _, bad := range []string{"", "History", "other"} {
+		wantRefused(t, probe(t, db, insert, id1, bad, "PENDING", "t1"), "chk_scan_enrichments_family", "family "+bad)
+	}
+	for _, ok := range []string{"PENDING", "RUNNING", "DONE", "ERROR"} {
+		wantAccepted(t, probe(t, db, insert, id1, "history", ok, "t1"), "status "+ok)
+	}
+	for _, bad := range []string{"", "pending", "UNKNOWN"} {
+		wantRefused(t, probe(t, db, insert, id1, "history", bad, "t1"), "chk_scan_enrichments_status", "status "+bad)
+	}
+	wantRefused(t, probe(t, db, insert, id1, "history", "PENDING", nil), "transition_id", "NULL transition_id")
+
+	// Unique (scan_id, family): the same pair under another enrichment_id is rejected, the other family is not.
+	tx := db.Begin()
+	if tx.Error != nil {
+		t.Fatalf("begin: %v", tx.Error)
+	}
+	defer tx.Rollback()
+	wantAccepted(t, tx.Exec(insert, id1, "history", "PENDING", "t1").Error, "first history row")
+	wantAccepted(t, tx.Exec("SAVEPOINT other_family").Error, "savepoint")
+	wantAccepted(t, tx.Exec(insert, id2, "deployer", "PENDING", "t1").Error, "deployer row of the same scan")
+	wantAccepted(t, tx.Exec("ROLLBACK TO SAVEPOINT other_family").Error, "rollback to savepoint")
+	wantRefused(t, tx.Exec(insert, id2, "history", "PENDING", "t1").Error, "idx_scan_enrichments_scan_family", "second history row of the same scan")
 }
 
 func listPublicIndexes(db *gorm.DB, tables []string) ([]string, error) {

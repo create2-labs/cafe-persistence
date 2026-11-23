@@ -47,6 +47,14 @@ var relatedAddressDDL = []string{
 	`ALTER TABLE scan_related_addresses ADD CONSTRAINT chk_scan_related_addresses_enrichment CHECK ((role = 'delegation_target' AND enrichment_id IS NULL) OR (role = 'deployer' AND enrichment_id IS NOT NULL))`,
 }
 
+// enrichmentDDL holds the constraints of scan_enrichments (design §5.7).
+var enrichmentDDL = []string{
+	`ALTER TABLE scan_enrichments DROP CONSTRAINT IF EXISTS chk_scan_enrichments_family`,
+	`ALTER TABLE scan_enrichments ADD CONSTRAINT chk_scan_enrichments_family CHECK (family IN ('history', 'deployer'))`,
+	`ALTER TABLE scan_enrichments DROP CONSTRAINT IF EXISTS chk_scan_enrichments_status`,
+	`ALTER TABLE scan_enrichments ADD CONSTRAINT chk_scan_enrichments_status CHECK (status IN ('PENDING', 'RUNNING', 'DONE', 'ERROR'))`,
+}
+
 // RequiredIndexNames are the IMM list/history indexes applied at persistence boot (ADR §14.5).
 var RequiredIndexNames = []string{
 	"idx_scan_results_user_address_created_at",
@@ -66,6 +74,7 @@ var ScanTableNames = []string{
 	"tls_scan_results",
 	"scan_usage_events",
 	"scan_related_addresses",
+	"scan_enrichments",
 }
 
 // MigrateScanSchema runs AutoMigrate on scan tables and applies IMM index DDL.
@@ -77,6 +86,7 @@ func MigrateScanSchema(db *gorm.DB) error {
 		&domain.ScanResultEntity{},
 		&domain.ScanUsageEventEntity{},
 		&domain.ScanRelatedAddressEntity{},
+		&domain.ScanEnrichmentEntity{},
 	); err != nil {
 		return fmt.Errorf("scan tables AutoMigrate: %w", err)
 	}
@@ -91,6 +101,11 @@ func MigrateScanSchema(db *gorm.DB) error {
 		}
 	}
 	for _, q := range relatedAddressDDL {
+		if err := db.Exec(q).Error; err != nil {
+			return fmt.Errorf("scan DDL %q: %w", q, err)
+		}
+	}
+	for _, q := range enrichmentDDL {
 		if err := db.Exec(q).Error; err != nil {
 			return fmt.Errorf("scan DDL %q: %w", q, err)
 		}
