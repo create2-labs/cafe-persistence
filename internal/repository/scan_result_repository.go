@@ -2,6 +2,7 @@ package repository
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 
 	"cafe-persistence/internal/domain"
@@ -40,12 +41,32 @@ func (r *scanResultRepository) FindOwnedWalletScanByID(userID, scanID uuid.UUID)
 	return &ent, nil
 }
 
+// DeleteOwnedWalletScan soft-deletes an owned scan with its related-address and enrichment rows
+// in one transaction. The scan row is written first: this is the lock order the enrichment
+// transition relies on. It returns false, and writes nothing else, when no owned live scan matches.
 func (r *scanResultRepository) DeleteOwnedWalletScan(userID, scanID uuid.UUID) (bool, error) {
-	res := r.db.Where("id = ? AND user_id = ?", scanID, userID).Delete(&domain.ScanResultEntity{})
-	if res.Error != nil {
-		return false, res.Error
+	var deleted bool
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		res := tx.Where("id = ? AND user_id = ?", scanID, userID).Delete(&domain.ScanResultEntity{})
+		if res.Error != nil {
+			return fmt.Errorf("delete scan: %w", res.Error)
+		}
+		if res.RowsAffected == 0 {
+			return nil
+		}
+		if err := tx.Where("scan_id = ?", scanID).Delete(&domain.ScanRelatedAddressEntity{}).Error; err != nil {
+			return fmt.Errorf("delete related addresses: %w", err)
+		}
+		if err := tx.Where("scan_id = ?", scanID).Delete(&domain.ScanEnrichmentEntity{}).Error; err != nil {
+			return fmt.Errorf("delete enrichments: %w", err)
+		}
+		deleted = true
+		return nil
+	})
+	if err != nil {
+		return false, err
 	}
-	return res.RowsAffected > 0, nil
+	return deleted, nil
 }
 
 func (r *scanResultRepository) ListOwnerWalletScansDiscoveryV1(userID uuid.UUID, address string, limit, offset int) ([]*domain.ScanResultEntity, int64, error) {

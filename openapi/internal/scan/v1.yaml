@@ -343,8 +343,9 @@ paths:
       tags: [wallet-scans]
       summary: Delete owner wallet scan row
       description: |
-        Soft-deletes the Postgres row and clears correlated Redis cache keys when this was the
-        last row for the address. **Does not** perform W3 policy reference checks — Discovery
+        Soft-deletes the Postgres row, its related-address rows, and its enrichment rows in one
+        transaction, and clears correlated Redis cache keys when this was the last row for the
+        address. **Does not** perform W3 policy reference checks — Discovery
         guards immutability before calling this endpoint (ADR §9.3).
       operationId: deleteWalletScan
       parameters:
