@@ -313,6 +313,46 @@ paths:
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
 
+  /wallets/scans/{scan_id}/enrichments/{enrichment_id}/transition:
+    post:
+      tags: [wallet-scans]
+      summary: Apply one enrichment transition of a wallet scan
+      operationId: applyEnrichmentTransition
+      parameters:
+        - $ref: "#/components/parameters/ScanId"
+        - name: enrichment_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: "#/components/parameters/UserIdHeader"
+        - $ref: "#/components/parameters/TenantIdHeader"
+        - $ref: "#/components/parameters/RequestIdHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnrichmentTransitionRequest"
+      responses:
+        "200":
+          description: |
+            Decoded command. `rejected` and `retryable_error` are HTTP 200. A transition writes no Redis
+            value and publishes nothing.
+            Unreadable JSON, an unknown field, a `scan_id` or `enrichment_id` that is not a UUID, and a
+            missing or invalid `X-User-Id` are protocol errors (400), not outcomes.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnrichmentTransitionResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/ServiceUnauthorized"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
   /wallets/scans/{scan_id}:
     parameters:
       - $ref: "#/components/parameters/ScanId"
@@ -638,6 +678,121 @@ components:
           type: boolean
         ready_published:
           type: boolean
+
+    EnrichmentStatus:
+      type: string
+      enum: [PENDING, RUNNING, DONE, ERROR]
+
+    EnrichmentFamily:
+      type: string
+      enum: [history, deployer]
+      description: The enrichment transition route accepts `history` only; `deployer` is rejected until increment 4.
+
+    EnrichmentChainOutcome:
+      type: string
+      enum: [pending, observed, not_observed, error]
+      description: |
+        Allowed values depend on the target state. PENDING: pending, not_observed, or error, with at least
+        one pending. DONE: observed, not_observed, or error. ERROR: error only.
+
+    EnrichmentChain:
+      type: object
+      required: [chain_id, outcome]
+      properties:
+        chain_id:
+          type: integer
+          format: int64
+          description: Positive and unique within `chains`.
+        outcome:
+          $ref: "#/components/schemas/EnrichmentChainOutcome"
+        code:
+          type: string
+          description: Non-empty exactly when outcome is `error`.
+        transaction_hash:
+          type: string
+          description: Required when outcome is `observed` (history), absent otherwise.
+        deployer:
+          type: string
+          description: Always absent for the `history` family.
+        creation_tx_hash:
+          type: string
+          description: Always absent for the `history` family.
+
+    EnrichmentTransitionResult:
+      type: object
+      required: [chains]
+      properties:
+        chains:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/EnrichmentChain"
+        related_addresses:
+          type: array
+          items:
+            $ref: "#/components/schemas/RelatedAddress"
+          description: Deployer family, increment 4. Absent for `history`.
+        public_key:
+          type: string
+        transaction_hash:
+          type: string
+        exposed_network:
+          type: string
+        public_key_recovery:
+          type: string
+          enum: [recovered, unresolved]
+          description: |
+            `history`, target DONE: required. `recovered` requires non-empty public_key, transaction_hash,
+            and exposed_network; `unresolved` requires all three absent. For PENDING and ERROR the four
+            recovery fields are absent.
+
+    EnrichmentTransitionRequest:
+      type: object
+      required: [transition_id, user_id, family, source_states, target_state, quota_action]
+      description: |
+        Any violation of the rules below is a `rejected` outcome with no write. The scan row must exist,
+        not be soft-deleted, belong to `X-User-Id`, and have status SUCCESS.
+      properties:
+        transition_id:
+          type: string
+          description: Non-empty after trimming.
+        user_id:
+          type: string
+          format: uuid
+          description: Not nil, equal to `X-User-Id`.
+        family:
+          $ref: "#/components/schemas/EnrichmentFamily"
+        source_states:
+          type: array
+          items:
+            $ref: "#/components/schemas/EnrichmentStatus"
+          description: |
+            Target PENDING or RUNNING: exactly [PENDING]. Target DONE or ERROR: a non-empty subset of
+            PENDING and RUNNING, without duplicates. DONE and ERROR are never a source.
+        target_state:
+          $ref: "#/components/schemas/EnrichmentStatus"
+        quota_action:
+          type: string
+          enum: [none]
+        result:
+          $ref: "#/components/schemas/EnrichmentTransitionResult"
+          description: |
+            Required for PENDING and DONE. Absent for RUNNING. For ERROR: optional on an existing row, with
+            `chains` only; required, with `chains` only, on a missing row.
+        error:
+          type: string
+          description: Required for ERROR, non-empty after trimming, stored trimmed. Absent for other targets.
+
+    EnrichmentTransitionResponse:
+      type: object
+      required: [outcome]
+      properties:
+        outcome:
+          $ref: "#/components/schemas/WalletTransitionOutcome"
+        status:
+          $ref: "#/components/schemas/EnrichmentStatus"
+          description: |
+            Present when the row was read. Omitted for retryable_error and for rejected without a read.
 
     ErrorResponse:
       type: object

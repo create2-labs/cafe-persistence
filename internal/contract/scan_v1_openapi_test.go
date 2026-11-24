@@ -25,6 +25,7 @@ func TestScanV1OpenAPI_RequiredPathsDocumented(t *testing.T) {
 		scanroutes.WalletScans,
 		scanroutes.WalletScanByID,
 		scanroutes.WalletScanTransition,
+		scanroutes.WalletScanEnrichmentTransition,
 		scanroutes.TLSScans,
 		scanroutes.TLSScansDefaults,
 		scanroutes.TLSScanByID,
@@ -315,6 +316,177 @@ func TestScanV1OpenAPI_WalletTransition(t *testing.T) {
 	errDesc, _ := req["error"].(map[string]any)["description"].(string)
 	if !strings.Contains(errDesc, "SUCCESS") {
 		t.Fatal("error must be documented as absent on SUCCESS")
+	}
+}
+
+func schemaSet(t *testing.T, schemas map[string]any, name string) map[string]bool {
+	t.Helper()
+	def, ok := schemas[name].(map[string]any)
+	if !ok {
+		t.Fatalf("schema %q missing", name)
+	}
+	enum, ok := def["enum"].([]any)
+	if !ok {
+		t.Fatalf("%s.enum missing", name)
+	}
+	have := make(map[string]bool, len(enum))
+	for _, v := range enum {
+		have[v.(string)] = true
+	}
+	return have
+}
+
+func schemaProps(t *testing.T, schemas map[string]any, name string) (map[string]any, map[string]bool) {
+	t.Helper()
+	def, ok := schemas[name].(map[string]any)
+	if !ok {
+		t.Fatalf("schema %q missing", name)
+	}
+	props, _ := def["properties"].(map[string]any)
+	required := map[string]bool{}
+	list, _ := def["required"].([]any)
+	for _, r := range list {
+		required[r.(string)] = true
+	}
+	return props, required
+}
+
+// ADR 6.6, design 5.8: the route is POST, takes both path identifiers, and answers 200 or a protocol error.
+func TestScanV1OpenAPI_EnrichmentTransitionRoute(t *testing.T) {
+	spec := loadScanV1OpenAPISpec(t)
+	paths := spec["paths"].(map[string]any)
+	item, ok := paths[scanroutes.WalletScanEnrichmentTransition].(map[string]any)
+	if !ok {
+		t.Fatal("enrichment transition path missing")
+	}
+	post, ok := item["post"].(map[string]any)
+	if !ok {
+		t.Fatal("POST enrichment transition missing")
+	}
+	for _, other := range []string{"get", "put", "patch", "delete"} {
+		if _, ok := item[other]; ok {
+			t.Fatalf("unexpected %s on the enrichment transition path", other)
+		}
+	}
+
+	params := spec["components"].(map[string]any)["parameters"].(map[string]any)
+	pathParams := map[string]bool{}
+	collect := func(list any) {
+		items, _ := list.([]any)
+		for _, raw := range items {
+			p, _ := raw.(map[string]any)
+			if ref, ok := p["$ref"].(string); ok {
+				p, _ = params[strings.TrimPrefix(ref, "#/components/parameters/")].(map[string]any)
+			}
+			if p["in"] == "path" {
+				pathParams[p["name"].(string)] = true
+			}
+		}
+	}
+	collect(item["parameters"])
+	collect(post["parameters"])
+	for _, name := range []string{"scan_id", "enrichment_id"} {
+		if !pathParams[name] {
+			t.Errorf("path parameter %q not documented", name)
+		}
+	}
+
+	body := post["requestBody"].(map[string]any)["content"].(map[string]any)["application/json"].(map[string]any)["schema"].(map[string]any)
+	if body["$ref"] != "#/components/schemas/EnrichmentTransitionRequest" {
+		t.Errorf("request schema = %#v", body)
+	}
+	responses := post["responses"].(map[string]any)
+	ok200, _ := responses["200"].(map[string]any)
+	schema := ok200["content"].(map[string]any)["application/json"].(map[string]any)["schema"].(map[string]any)
+	if schema["$ref"] != "#/components/schemas/EnrichmentTransitionResponse" {
+		t.Errorf("200 schema = %#v", schema)
+	}
+	for _, code := range []string{"400", "401"} {
+		if _, ok := responses[code]; !ok {
+			t.Errorf("response %s not documented", code)
+		}
+	}
+}
+
+// Design 5.8 (OpenAPI schemas): vocabulary of the enrichment transition.
+func TestScanV1OpenAPI_EnrichmentVocabulary(t *testing.T) {
+	spec := loadScanV1OpenAPISpec(t)
+	schemas := spec["components"].(map[string]any)["schemas"].(map[string]any)
+
+	status := schemaSet(t, schemas, "EnrichmentStatus")
+	for _, v := range []string{"PENDING", "RUNNING", "DONE", "ERROR"} {
+		if !status[v] {
+			t.Errorf("EnrichmentStatus missing %q", v)
+		}
+	}
+	if !schemaSet(t, schemas, "EnrichmentFamily")["history"] {
+		t.Error("EnrichmentFamily missing history")
+	}
+	outcome := schemaSet(t, schemas, "EnrichmentChainOutcome")
+	for _, v := range []string{"pending", "observed", "not_observed", "error"} {
+		if !outcome[v] {
+			t.Errorf("EnrichmentChainOutcome missing %q", v)
+		}
+	}
+}
+
+// Design 5.8 (Body, Response): request, result, chain, and response shapes.
+func TestScanV1OpenAPI_EnrichmentTransitionSchemas(t *testing.T) {
+	spec := loadScanV1OpenAPISpec(t)
+	schemas := spec["components"].(map[string]any)["schemas"].(map[string]any)
+
+	props, required := schemaProps(t, schemas, "EnrichmentTransitionRequest")
+	for _, name := range []string{"transition_id", "user_id", "family", "source_states", "target_state", "quota_action", "result", "error"} {
+		if _, ok := props[name]; !ok {
+			t.Errorf("EnrichmentTransitionRequest.%s missing", name)
+		}
+	}
+	for _, name := range []string{"transition_id", "user_id", "family", "source_states", "target_state", "quota_action"} {
+		if !required[name] {
+			t.Errorf("EnrichmentTransitionRequest.%s must be required", name)
+		}
+	}
+	for _, name := range []string{"result", "error"} {
+		if required[name] {
+			t.Errorf("EnrichmentTransitionRequest.%s must be optional", name)
+		}
+	}
+
+	props, required = schemaProps(t, schemas, "EnrichmentTransitionResult")
+	for _, name := range []string{"chains", "related_addresses", "public_key", "transaction_hash", "exposed_network", "public_key_recovery"} {
+		if _, ok := props[name]; !ok {
+			t.Errorf("EnrichmentTransitionResult.%s missing", name)
+		}
+	}
+	if !required["chains"] || len(required) != 1 {
+		t.Errorf("EnrichmentTransitionResult required = %v, want only chains", required)
+	}
+
+	props, required = schemaProps(t, schemas, "EnrichmentChain")
+	for _, name := range []string{"chain_id", "outcome", "code", "transaction_hash", "deployer", "creation_tx_hash"} {
+		if _, ok := props[name]; !ok {
+			t.Errorf("EnrichmentChain.%s missing", name)
+		}
+	}
+	if !required["chain_id"] || !required["outcome"] || len(required) != 2 {
+		t.Errorf("EnrichmentChain required = %v, want chain_id and outcome", required)
+	}
+
+	props, required = schemaProps(t, schemas, "EnrichmentTransitionResponse")
+	out, _ := props["outcome"].(map[string]any)
+	if out["$ref"] != "#/components/schemas/WalletTransitionOutcome" {
+		t.Errorf("response outcome must reuse WalletTransitionOutcome, got %#v", out)
+	}
+	if _, ok := props["status"]; !ok {
+		t.Error("EnrichmentTransitionResponse.status missing")
+	}
+	if !required["outcome"] || required["status"] {
+		t.Errorf("response required = %v, want outcome only", required)
+	}
+	for _, name := range []string{"projection_ready", "ready_published"} {
+		if _, ok := props[name]; ok {
+			t.Errorf("EnrichmentTransitionResponse.%s must not exist", name)
+		}
 	}
 }
 
