@@ -6,6 +6,18 @@ on:
   push:
     tags:
       - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing release tag to promote (its RC image sha-<commit> must exist)'
+        required: true
+        type: string
+  workflow_call:
+    inputs:
+      tag:
+        description: 'Release tag to promote (passed by release-please.yml)'
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -35,7 +47,8 @@ jobs:
       - name: Extract version and SHA from tag
         id: version
         run: |
-          TAG=${GITHUB_REF#refs/tags/}
+          TAG="${{ inputs.tag }}"
+          TAG=${TAG:-${GITHUB_REF#refs/tags/}}
           FULL_SHA=$(git rev-list -n 1 "$TAG")
           SHORT_SHA=$(echo "$FULL_SHA" | cut -c1-7)
           echo "full_version=$TAG" >> $GITHUB_OUTPUT

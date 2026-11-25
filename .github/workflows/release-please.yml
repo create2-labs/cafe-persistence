@@ -13,12 +13,37 @@ permissions:
 jobs:
   release-please:
     runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
     permissions:
       contents: write
       pull-requests: write
       id-token: write
     steps:
       - uses: googleapis/release-please-action@v4
+        id: release
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           release-type: go
+
+  # A tag created with GITHUB_TOKEN does not trigger docker-release.yml,
+  # so the release image is built and promoted from this workflow.
+  image-rc:
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/docker-rc.yml
+    with:
+      target_version: ${{ needs.release-please.outputs.tag_name }}
+    secrets: inherit
+
+  image-release:
+    needs: [release-please, image-rc]
+    permissions:
+      contents: read
+    uses: ./.github/workflows/docker-release.yml
+    with:
+      tag: ${{ needs.release-please.outputs.tag_name }}
+    secrets: inherit
