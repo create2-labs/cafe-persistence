@@ -18,4 +18,5 @@ const (
 	TLSScansDefaults               = "/tls/scans/defaults"
 	TLSScanByID                    = "/tls/scans/{scan_id}"
 	LedgerUsage                    = "/ledger/usage"
+	Enrichments                    = "/enrichments"
 )

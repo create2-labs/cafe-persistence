@@ -30,6 +30,7 @@ func TestScanV1OpenAPI_RequiredPathsDocumented(t *testing.T) {
 		scanroutes.TLSScansDefaults,
 		scanroutes.TLSScanByID,
 		scanroutes.LedgerUsage,
+		scanroutes.Enrichments,
 	} {
 		if _, ok := paths[route]; !ok {
 			t.Fatalf("openapi paths missing %q", route)
@@ -502,4 +503,59 @@ func loadScanV1OpenAPISpec(t *testing.T) map[string]any {
 		t.Fatalf("parse openapi: %v", err)
 	}
 	return spec
+}
+
+// CA4.4, ET7: the open-enrichment operation and its schemas are documented, with no owner header.
+func TestScanV1OpenAPI_OpenEnrichmentsRoute(t *testing.T) {
+	spec := loadScanV1OpenAPISpec(t)
+	paths := spec["paths"].(map[string]any)
+	item, ok := paths[scanroutes.Enrichments].(map[string]any)
+	if !ok {
+		t.Fatalf("openapi paths missing %q", scanroutes.Enrichments)
+	}
+	op, ok := item["get"].(map[string]any)
+	if !ok {
+		t.Fatal("GET operation missing")
+	}
+	params, _ := op["parameters"].([]any)
+	required := map[string]bool{}
+	for _, p := range params {
+		pm, _ := p.(map[string]any)
+		if name, _ := pm["name"].(string); name != "" {
+			req, _ := pm["required"].(bool)
+			required[name] = req
+		}
+		if ref, _ := pm["$ref"].(string); strings.HasSuffix(ref, "UserIdHeader") {
+			t.Fatalf("operation must not take X-User-Id, got %q", ref)
+		}
+		if name, _ := pm["name"].(string); strings.EqualFold(name, "X-User-Id") {
+			t.Fatal("operation must not take X-User-Id")
+		}
+	}
+	for name, want := range map[string]bool{"status": false, "created_before": true, "limit": false} {
+		got, ok := required[name]
+		if !ok {
+			t.Errorf("query parameter %q missing", name)
+		} else if got != want {
+			t.Errorf("query parameter %q required = %v, want %v", name, got, want)
+		}
+	}
+	responses, _ := op["responses"].(map[string]any)
+	for _, code := range []string{"200", "400", "503"} {
+		if _, ok := responses[code]; !ok {
+			t.Errorf("response %s missing", code)
+		}
+	}
+	schemas := spec["components"].(map[string]any)["schemas"].(map[string]any)
+	for _, name := range []string{"OpenEnrichment", "OpenEnrichmentList"} {
+		if _, ok := schemas[name]; !ok {
+			t.Fatalf("openapi schema missing %q", name)
+		}
+	}
+	props, _ := schemas["OpenEnrichment"].(map[string]any)["properties"].(map[string]any)
+	for _, k := range []string{"enrichment_id", "scan_id", "user_id", "family", "status", "chains", "created_at"} {
+		if _, ok := props[k]; !ok {
+			t.Errorf("OpenEnrichment.%s missing", k)
+		}
+	}
 }

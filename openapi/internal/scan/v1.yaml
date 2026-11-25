@@ -353,6 +353,63 @@ paths:
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
 
+  /enrichments:
+    get:
+      tags: [wallet-scans]
+      summary: List open enrichments
+      description: |
+        Lists the enrichments that are still open (`PENDING` or `RUNNING`) and were created before a
+        given instant, oldest first (`created_at`, then `enrichment_id`). This route alone takes no
+        `X-User-Id`: a header that is sent is ignored. The service bearer token still applies. There are
+        no totals and no offset; an abandoned enrichment leaves the open set, so the next call returns
+        the next ones.
+      operationId: listOpenEnrichments
+      parameters:
+        - $ref: "#/components/parameters/TenantIdHeader"
+        - $ref: "#/components/parameters/RequestIdHeader"
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+          description: |
+            Comma-separated list, each value `PENDING` or `RUNNING`, without duplicates. Absent means both.
+        - name: created_before
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date-time
+          description: RFC 3339, with or without fractional seconds. Only enrichments created strictly before it are listed.
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 100
+          description: A value out of range is an error, not clamped.
+      responses:
+        "200":
+          description: Open enrichments, oldest first.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OpenEnrichmentList"
+        "400":
+          description: |
+            `invalid_request`: an unknown or duplicate `status` value, a missing or malformed
+            `created_before`, or a `limit` out of range.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/ServiceUnauthorized"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
   /wallets/scans/{scan_id}:
     parameters:
       - $ref: "#/components/parameters/ScanId"
@@ -793,6 +850,43 @@ components:
           $ref: "#/components/schemas/EnrichmentStatus"
           description: |
             Present when the row was read. Omitted for retryable_error and for rejected without a read.
+
+    OpenEnrichment:
+      type: object
+      required: [enrichment_id, scan_id, user_id, family, status, chains, created_at]
+      properties:
+        enrichment_id:
+          type: string
+          format: uuid
+        scan_id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        family:
+          $ref: "#/components/schemas/EnrichmentFamily"
+        status:
+          type: string
+          enum: [PENDING, RUNNING]
+        chains:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/EnrichmentChain"
+        created_at:
+          type: string
+          format: date-time
+          description: RFC 3339 with nanoseconds, UTC.
+
+    OpenEnrichmentList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/OpenEnrichment"
 
     ErrorResponse:
       type: object

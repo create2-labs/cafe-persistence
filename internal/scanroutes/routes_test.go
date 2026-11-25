@@ -29,6 +29,7 @@ func TestRouteLiteralsAreRelative(t *testing.T) {
 		scanroutes.TLSScansDefaults,
 		scanroutes.TLSScanByID,
 		scanroutes.LedgerUsage,
+		scanroutes.Enrichments,
 	} {
 		if strings.HasPrefix(route, scanroutes.V1Base) {
 			t.Fatalf("openapi-relative route %q must not include V1Base", route)
