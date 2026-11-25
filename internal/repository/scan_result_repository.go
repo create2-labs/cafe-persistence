@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"cafe-persistence/internal/domain"
 
@@ -11,13 +12,18 @@ import (
 	"gorm.io/gorm"
 )
 
-// ScanResultRepository defines owner-scoped wallet scan read/delete operations.
+// ScanResultRepository defines wallet scan read/delete operations. Methods that take a userID are
+// scoped to that owner; ListOpenEnrichments is cross-user.
 type ScanResultRepository interface {
 	FindOwnedWalletScanByID(userID, scanID uuid.UUID) (*domain.ScanResultEntity, error)
 	DeleteOwnedWalletScan(userID, scanID uuid.UUID) (deleted bool, err error)
 	ListOwnerWalletScansDiscoveryV1(userID uuid.UUID, address string, limit, offset int) ([]*domain.ScanResultEntity, int64, error)
 	ListOwnerWalletScansByAddress(userID uuid.UUID, address string) ([]*domain.ScanResultEntity, error)
 	ListRelatedAddresses(scanID uuid.UUID) ([]domain.ScanRelatedAddressEntity, error)
+	// ListOpenEnrichments is cross-user: it has no user filter and returns the user_id of every row. It is
+	// only for the internal open-enrichment route. It returns the live enrichments whose status is in statuses
+	// and whose created_at is before the bound, ordered by created_at then enrichment_id, at most limit rows (design §5.11).
+	ListOpenEnrichments(statuses []string, before time.Time, limit int) ([]domain.ScanEnrichmentEntity, error)
 }
 
 type scanResultRepository struct {
@@ -106,6 +112,23 @@ func (r *scanResultRepository) ListRelatedAddresses(scanID uuid.UUID) ([]domain.
 	err := r.db.Where("scan_id = ?", scanID).Order("chain_id ASC, role ASC, address ASC").Find(&out).Error
 	if err != nil {
 		return nil, err
+	}
+	return out, nil
+}
+
+// ListOpenEnrichments returns the live enrichments in the given statuses created strictly before the bound.
+// It is cross-user: there is no user filter and every row carries its user_id. Only the internal
+// open-enrichment route may call it.
+// GORM's default scope excludes soft-deleted rows; no join on scan_results is needed because a scan deletion
+// soft-deletes its enrichments in the same transaction (design §5.11).
+func (r *scanResultRepository) ListOpenEnrichments(statuses []string, before time.Time, limit int) ([]domain.ScanEnrichmentEntity, error) {
+	var out []domain.ScanEnrichmentEntity
+	err := r.db.Where("status IN ? AND created_at < ?", statuses, before).
+		Order("created_at ASC, enrichment_id ASC").
+		Limit(limit).
+		Find(&out).Error
+	if err != nil {
+		return nil, fmt.Errorf("list open enrichments: %w", err)
 	}
 	return out, nil
 }

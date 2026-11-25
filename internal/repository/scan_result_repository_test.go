@@ -2,6 +2,7 @@ package repository
 
 import (
 	"testing"
+	"time"
 
 	"cafe-persistence/internal/domain"
 
@@ -174,5 +175,94 @@ func TestDeleteOwnedWalletScan_RollsBackOnError(t *testing.T) {
 	}
 	if related.deleted != 0 || related.live != 2 {
 		t.Errorf("related rows not rolled back: %+v", related)
+	}
+}
+
+func seedOpenEnrichmentRow(t *testing.T, db *gorm.DB, id uuid.UUID, status string, createdAt time.Time) domain.ScanEnrichmentEntity {
+	t.Helper()
+	e := domain.ScanEnrichmentEntity{
+		EnrichmentID: id, ScanID: uuid.New(), Family: "history", UserID: uuid.New(),
+		Status: status, Chains: "[]", TransitionID: "t1", CreatedAt: createdAt, UpdatedAt: createdAt,
+	}
+	if err := db.Create(&e).Error; err != nil {
+		t.Fatalf("seed enrichment: %v", err)
+	}
+	return e
+}
+
+func enrichmentIDs(rows []domain.ScanEnrichmentEntity) []uuid.UUID {
+	ids := make([]uuid.UUID, 0, len(rows))
+	for _, r := range rows {
+		ids = append(ids, r.EnrichmentID)
+	}
+	return ids
+}
+
+// CA4.4, ET7: open status, strictly before the bound, no join on the scan, soft-deleted excluded.
+func TestListOpenEnrichments_FiltersStatusBoundAndSoftDelete(t *testing.T) {
+	db, repo := setupScanResultTestDB(t)
+	base := time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC)
+	idPending := uuid.MustParse("00000000-0000-0000-0000-000000000001")
+	idRunning := uuid.MustParse("00000000-0000-0000-0000-000000000002")
+	seedOpenEnrichmentRow(t, db, idPending, "PENDING", base.Add(-2*time.Hour))
+	seedOpenEnrichmentRow(t, db, idRunning, "RUNNING", base.Add(-time.Hour))
+	seedOpenEnrichmentRow(t, db, uuid.New(), "DONE", base.Add(-3*time.Hour))
+	seedOpenEnrichmentRow(t, db, uuid.New(), "ERROR", base.Add(-3*time.Hour))
+	seedOpenEnrichmentRow(t, db, uuid.New(), "PENDING", base) // equal to the bound
+	gone := seedOpenEnrichmentRow(t, db, uuid.New(), "PENDING", base.Add(-4*time.Hour))
+	if err := db.Delete(&gone).Error; err != nil {
+		t.Fatalf("soft delete: %v", err)
+	}
+
+	rows, err := repo.ListOpenEnrichments([]string{"PENDING", "RUNNING"}, base, 100)
+	if err != nil {
+		t.Fatalf("ListOpenEnrichments: %v", err)
+	}
+	got := enrichmentIDs(rows)
+	if len(got) != 2 || got[0] != idPending || got[1] != idRunning {
+		t.Fatalf("ids = %v, want [%s %s]", got, idPending, idRunning)
+	}
+
+	rows, err = repo.ListOpenEnrichments([]string{"RUNNING"}, base, 100)
+	if err != nil || len(rows) != 1 || rows[0].EnrichmentID != idRunning {
+		t.Fatalf("RUNNING only: rows %v, err %v", enrichmentIDs(rows), err)
+	}
+}
+
+// ET7: order by created_at then enrichment_id; the limit truncates after the order.
+func TestListOpenEnrichments_OrderAndLimit(t *testing.T) {
+	db, repo := setupScanResultTestDB(t)
+	base := time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC)
+	same := base.Add(-time.Hour)
+	id1 := uuid.MustParse("00000000-0000-0000-0000-000000000001")
+	id2 := uuid.MustParse("00000000-0000-0000-0000-000000000002")
+	id3 := uuid.MustParse("00000000-0000-0000-0000-000000000003")
+	seedOpenEnrichmentRow(t, db, id3, "PENDING", same)
+	seedOpenEnrichmentRow(t, db, id1, "PENDING", same)
+	seedOpenEnrichmentRow(t, db, id2, "PENDING", same.Add(-time.Minute))
+
+	rows, err := repo.ListOpenEnrichments([]string{"PENDING"}, base, 100)
+	if err != nil {
+		t.Fatalf("ListOpenEnrichments: %v", err)
+	}
+	got := enrichmentIDs(rows)
+	if len(got) != 3 || got[0] != id2 || got[1] != id1 || got[2] != id3 {
+		t.Fatalf("ids = %v, want [%s %s %s]", got, id2, id1, id3)
+	}
+	rows, err = repo.ListOpenEnrichments([]string{"PENDING"}, base, 2)
+	if err != nil || len(rows) != 2 || rows[0].EnrichmentID != id2 || rows[1].EnrichmentID != id1 {
+		t.Fatalf("limit 2: rows %v, err %v", enrichmentIDs(rows), err)
+	}
+}
+
+// CA4.4: a store failure is returned, never an empty result.
+func TestListOpenEnrichments_StoreError(t *testing.T) {
+	db, repo := setupScanResultTestDB(t)
+	if err := db.Migrator().DropTable(&domain.ScanEnrichmentEntity{}); err != nil {
+		t.Fatalf("drop table: %v", err)
+	}
+	rows, err := repo.ListOpenEnrichments([]string{"PENDING"}, time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC), 100)
+	if err == nil || len(rows) != 0 {
+		t.Fatalf("rows %v, err %v, want an error", rows, err)
 	}
 }
