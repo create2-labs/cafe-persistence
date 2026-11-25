@@ -13,6 +13,12 @@ on:
         description: "Target version for optional RC tag (e.g. 1.0.0 or v1.0.0)"
         required: false
         type: string
+  workflow_call:
+    inputs:
+      target_version:
+        description: 'Release version for the RC tag and APP_VERSION (passed by release-please.yml)'
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -24,6 +30,7 @@ jobs:
   build-and-push:
     if: |
       github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'push' ||
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
 
@@ -57,7 +64,7 @@ jobs:
           echo "short_sha=$SHORT_SHA" >> $GITHUB_OUTPUT
 
           RC_TAG=""
-          if [[ "${{ github.event_name }}" == 'workflow_dispatch' && -n "${{ inputs.target_version }}" ]]; then
+          if [[ "${{ github.event_name }}" != 'pull_request_target' && -n "${{ inputs.target_version }}" ]]; then
             V="${{ inputs.target_version }}"
             V="${V#v}"
             RC_TAG="v${V}-rc${{ github.run_id }}"
