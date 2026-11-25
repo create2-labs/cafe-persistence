@@ -1,5 +1,30 @@
 # Changelog
 
+## [3.1.0](https://github.com/create2-labs/cafe-persistence/compare/v3.0.0...v3.1.0) (2026-11-25)
+
+
+### Features
+
+* **scan:** add the scan_enrichments table ([a9bccdd](https://github.com/create2-labs/cafe-persistence/commit/a9bccdd48b55e001afb6e7eddfcfbb7be814e370))
+* **scan:** add the scan_enrichments table ([03b23ec](https://github.com/create2-labs/cafe-persistence/commit/03b23ec317d922e9f7b62d31340324c7cddbfabe))
+* **scan:** build wallet.observed from the stored qualification ([c73852f](https://github.com/create2-labs/cafe-persistence/commit/c73852f194f5d9f79c6ffa880b89d6b6d55158ee))
+* **scan:** document the enrichment transition route ([89f1610](https://github.com/create2-labs/cafe-persistence/commit/89f161045ebb08264353f62cfa97febbebe7d2d3))
+* **scan:** document the enrichment transition route ([aabc34f](https://github.com/create2-labs/cafe-persistence/commit/aabc34f600943f9485d1a99d74fa4f1aa24adb83))
+* **scan:** document the open-enrichment route ([fcde59a](https://github.com/create2-labs/cafe-persistence/commit/fcde59a61f8c8391fb6f62cd45fdfbe27b2a0b8d))
+* **scan:** document the open-enrichment route ([d5b138a](https://github.com/create2-labs/cafe-persistence/commit/d5b138ab6da08d9b83100436785b1c5ca11364fc))
+* **scan:** publish wallet.observed only for an eoa ([85a8731](https://github.com/create2-labs/cafe-persistence/commit/85a87312c415f8a74ef90f23f7defc260d901192))
+* **scan:** publish wallet.observed only for an eoa ([e9b587d](https://github.com/create2-labs/cafe-persistence/commit/e9b587ddd1069bcacf9eb37724c57cc98d0d6b5e))
+* **scan:** query open enrichments ([0dc8fd4](https://github.com/create2-labs/cafe-persistence/commit/0dc8fd46bc136ab042a6302a729229384a9dacfc))
+* **scan:** query open enrichments ([240efd3](https://github.com/create2-labs/cafe-persistence/commit/240efd3cca63665c61d8fc543113f7b27d89b7a9))
+* **scan:** soft-delete related addresses and enrichments with their scan ([9cbf5b0](https://github.com/create2-labs/cafe-persistence/commit/9cbf5b0a79f137b7845a44a8d7cd823fabd4be24))
+* **scan:** soft-delete related addresses and enrichments with their scan ([0603c2c](https://github.com/create2-labs/cafe-persistence/commit/0603c2c369505779cec7ce9d3b7c5cf12a09104e))
+
+
+### Bug Fixes
+
+* ci error ([14eed06](https://github.com/create2-labs/cafe-persistence/commit/14eed06ae0d1b5e54c7cb8293d00662e73fa4ebf))
+* go test is already run in CI image ([827ceae](https://github.com/create2-labs/cafe-persistence/commit/827ceae740abb2db12060ad3b09dd8afe1a1084a))
+
 ## [3.0.0](https://github.com/create2-labs/cafe-persistence/compare/v2.2.0...v3.0.0) (2026-11-18)
 
 
