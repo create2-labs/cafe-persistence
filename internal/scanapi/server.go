@@ -36,6 +36,7 @@ func RegisterRoutes(mux *http.ServeMux, h *Handler) {
 	register("GET", scanroutes.WalletScanByID, h.GetWalletScan)
 	register("DELETE", scanroutes.WalletScanByID, h.DeleteWalletScan)
 	register("POST", scanroutes.WalletScanTransition, h.ApplyWalletTransition)
+	register("POST", scanroutes.WalletScanEnrichmentTransition, h.ApplyEnrichmentTransition)
 	register("GET", scanroutes.TLSScans, h.ListTLSScans)
 	register("GET", scanroutes.TLSScansDefaults, h.ListTLSDefaultScans)
 	register("GET", scanroutes.TLSScanByID, h.GetTLSScan)
