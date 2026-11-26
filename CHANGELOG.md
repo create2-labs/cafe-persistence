@@ -1,5 +1,23 @@
 # Changelog
 
+## [3.2.0](https://github.com/create2-labs/cafe-persistence/compare/v3.1.0...v3.2.0) (2026-11-26)
+
+
+### Features
+
+* **scan:** create a missing enrichment in one transaction ([5eae9ab](https://github.com/create2-labs/cafe-persistence/commit/5eae9ab452053089e10d1f959803ccfe8fd32fd7))
+* **scan:** create a missing enrichment in one transaction ([173f15f](https://github.com/create2-labs/cafe-persistence/commit/173f15f312deeae16a0bebf4e2d5e0dbb84b96fa))
+* **scan:** list open enrichments for the abandon ([da1c049](https://github.com/create2-labs/cafe-persistence/commit/da1c049a44b6729087ae757dc483a56c010871ac))
+* **scan:** list open enrichments for the abandon ([1cefdf3](https://github.com/create2-labs/cafe-persistence/commit/1cefdf36e5d2e81842781f8158515e77a3705812))
+* **scan:** serve the enrichment transition route for pending enrichments ([6a33c1a](https://github.com/create2-labs/cafe-persistence/commit/6a33c1a190a790f680a94bd89c12b02d09916b74))
+* **scan:** serve the enrichment transition route for pending enrichments ([aa3beaf](https://github.com/create2-labs/cafe-persistence/commit/aa3beaf19bba747b4a84f23d610d62d9593153e4))
+
+
+### Bug Fixes
+
+* **scan:** drop chains from the open-enrichment contract ([4964f6a](https://github.com/create2-labs/cafe-persistence/commit/4964f6a722079a4a825d6fa0e81fc2f17290acd6))
+* **scan:** drop chains from the open-enrichment contract ([5d480fa](https://github.com/create2-labs/cafe-persistence/commit/5d480fa16aa6dd257c36d2b635dd6bb2d879396b))
+
 ## [3.1.0](https://github.com/create2-labs/cafe-persistence/compare/v3.0.0...v3.1.0) (2026-11-25)
 
 
