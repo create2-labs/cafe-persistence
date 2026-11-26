@@ -41,6 +41,7 @@ func RegisterRoutes(mux *http.ServeMux, h *Handler) {
 	register("GET", scanroutes.TLSScanByID, h.GetTLSScan)
 	register("DELETE", scanroutes.TLSScanByID, h.DeleteTLSScan)
 	register("GET", scanroutes.LedgerUsage, h.GetScanLedgerUsage)
+	register("GET", scanroutes.Enrichments, h.ListOpenEnrichments)
 }
 
 // NewServerFromMux serves a pre-built mux (scan + CP routes) on host:port.
