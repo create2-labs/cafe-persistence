@@ -3,6 +3,7 @@ package contract
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -552,10 +553,19 @@ func TestScanV1OpenAPI_OpenEnrichmentsRoute(t *testing.T) {
 			t.Fatalf("openapi schema missing %q", name)
 		}
 	}
-	props, _ := schemas["OpenEnrichment"].(map[string]any)["properties"].(map[string]any)
-	for _, k := range []string{"enrichment_id", "scan_id", "user_id", "family", "status", "chains", "created_at"} {
+	// OC-P70d: the open enrichment carries no chains; properties and required are exact.
+	want := []string{"enrichment_id", "scan_id", "user_id", "family", "status", "created_at"}
+	def := schemas["OpenEnrichment"].(map[string]any)
+	props, _ := def["properties"].(map[string]any)
+	if len(props) != len(want) {
+		t.Errorf("OpenEnrichment properties = %v, want exactly %v", props, want)
+	}
+	for _, k := range want {
 		if _, ok := props[k]; !ok {
 			t.Errorf("OpenEnrichment.%s missing", k)
 		}
+	}
+	if got, _ := def["required"].([]any); !reflect.DeepEqual(got, []any{"enrichment_id", "scan_id", "user_id", "family", "status", "created_at"}) {
+		t.Errorf("OpenEnrichment.required = %v, want %v", got, want)
 	}
 }

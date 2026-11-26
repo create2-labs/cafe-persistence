@@ -853,7 +853,7 @@ components:
 
     OpenEnrichment:
       type: object
-      required: [enrichment_id, scan_id, user_id, family, status, chains, created_at]
+      required: [enrichment_id, scan_id, user_id, family, status, created_at]
       properties:
         enrichment_id:
           type: string
@@ -869,11 +869,6 @@ components:
         status:
           type: string
           enum: [PENDING, RUNNING]
-        chains:
-          type: array
-          minItems: 1
-          items:
-            $ref: "#/components/schemas/EnrichmentChain"
         created_at:
           type: string
           format: date-time
